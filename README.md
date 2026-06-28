@@ -1,1 +1,1 @@
-# security-education-chat-app
+Security Education Chat App
