@@ -2,10 +2,10 @@ import { useState } from 'react'
 import Sidebar from './components/Sidebar'
 import ThreatModel from './components/ThreatModel'
 import Level1 from './levels/Level1/Level1'
+import Level2 from './levels/Level2/Level2'
 import './App.css'
 
 const placeholderLevels = {
-  2: { label: 'Level 2 — AES encryption',    week: 'Week 4' },
   3: { label: 'Level 3 — Key exchange (DH)', week: 'Week 4' },
   4: { label: 'Level 4 — Authentication',    week: 'Week 5' },
   5: { label: 'Level 5 — Integrity / HMAC',  week: 'Week 6' },
@@ -18,6 +18,7 @@ function App() {
 
   function renderSimulator() {
     if (currentLevel === 1) return <Level1 />
+    if (currentLevel === 2) return <Level2 />
     const p = placeholderLevels[currentLevel]
     return (
       <div className="placeholder">

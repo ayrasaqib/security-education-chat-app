@@ -24,7 +24,7 @@ function ThreatModel({ level }) {
     {
       threat: 'Information disclosure',
       attack: 'Passive eavesdropping — full message content readable by anyone on the network',
-      risk: 'high',
+      risk: 'critical',
       mitigatedAt: 2,
       mitigation: 'AES encryption (Level 2)',
     },
@@ -44,14 +44,17 @@ function ThreatModel({ level }) {
     },
   ]
 
-  function riskClass(risk, mitigatedAt) {
-    if (level >= mitigatedAt) return 'risk-low'
-    return risk === 'high' ? 'risk-high' : 'risk-med'
-  }
-
-  function riskLabel(risk, mitigatedAt) {
-    if (level >= mitigatedAt) return 'Mitigated'
-    return risk === 'high' ? 'High' : 'Medium'
+  function getRiskStatus(risk, mitigatedAt) {
+    if (level >= mitigatedAt) {
+      return { className: 'risk-low', label: 'Low' }
+    }
+    if (risk === 'critical') {
+      return { className: 'risk-critical', label: 'Critical' }
+    }
+    if (risk === 'high') {
+      return { className: 'risk-high', label: 'High' }
+    }
+    return { className: 'risk-med', label: 'Medium' }
   }
 
   return (
@@ -75,14 +78,17 @@ function ThreatModel({ level }) {
           </tr>
         </thead>
         <tbody>
-          {threats.map(t => (
-            <tr key={t.threat}>
-              <td><strong>{t.threat}</strong></td>
-              <td>{t.attack}</td>
-              <td><span className={riskClass(t.risk, t.mitigatedAt)}>{riskLabel(t.risk, t.mitigatedAt)}</span></td>
-              <td>{t.mitigation}</td>
-            </tr>
-          ))}
+          {threats.map(t => {
+            const { className, label } = getRiskStatus(t.risk, t.mitigatedAt)
+            return (
+              <tr key={t.threat}>
+                <td><strong>{t.threat}</strong></td>
+                <td>{t.attack}</td>
+                <td><span className={className}>{label}</span></td>
+                <td>{t.mitigation}</td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
 
@@ -90,7 +96,7 @@ function ThreatModel({ level }) {
         <strong>Level {level} posture — </strong>
         {level === 1
           ? 'All threats are unmitigated. This is the zero-security baseline.'
-          : `${threats.filter(t => level >= t.mitigatedAt).length} of ${threats.length} threat categories mitigated at this level.`
+          : `${threats.filter(t => level >= t.mitigatedAt).length} threats mitigated at this level.`
         }
       </div>
     </div>

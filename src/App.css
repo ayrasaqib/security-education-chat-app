@@ -332,9 +332,10 @@
   line-height: 1.5;
 }
 
-.risk-high { background: #fef2f2; color: #b91c1c; padding: 2px 7px; border-radius: 99px; font-weight: 500; font-size: 11px; }
-.risk-med  { background: #fffbeb; color: #92400e; padding: 2px 7px; border-radius: 99px; font-weight: 500; font-size: 11px; }
-.risk-low  { background: #f0fdf4; color: #15803d; padding: 2px 7px; border-radius: 99px; font-weight: 500; font-size: 11px; }
+.risk-high     { background: #fff7ed; color: #c2410c; padding: 2px 7px; border-radius: 99px; font-weight: 500; font-size: 11px; }
+.risk-med      { background: #fefce8; color: #a16207; padding: 2px 7px; border-radius: 99px; font-weight: 500; font-size: 11px; }
+.risk-low      { background: #f0fdf4; color: #15803d; padding: 2px 7px; border-radius: 99px; font-weight: 500; font-size: 11px; }
+.risk-critical { background: #fef2f2; color: #b91c1c; padding: 2px 7px; border-radius: 99px; font-weight: 500; font-size: 11px; }
 
 .threat-warning {
   margin-top: 14px;
