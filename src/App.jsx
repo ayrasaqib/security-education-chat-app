@@ -1,7 +1,83 @@
+import { useState } from 'react'
+import Sidebar from './components/Sidebar'
+import ThreatModel from './components/ThreatModel'
+import Level1 from './levels/Level1/Level1'
+import './App.css'
+
+const placeholderLevels = {
+  2: { label: 'Level 2 — AES encryption',    week: 'Week 4' },
+  3: { label: 'Level 3 — Key exchange (DH)', week: 'Week 4' },
+  4: { label: 'Level 4 — Authentication',    week: 'Week 5' },
+  5: { label: 'Level 5 — Integrity / HMAC',  week: 'Week 6' },
+  6: { label: 'Level 6 — Defence in depth',  week: 'Week 7' },
+}
+
 function App() {
+  const [currentLevel, setCurrentLevel] = useState(1)
+  const [activeTab, setActiveTab] = useState('simulator')
+
+  function renderSimulator() {
+    if (currentLevel === 1) return <Level1 />
+    const p = placeholderLevels[currentLevel]
+    return (
+      <div className="placeholder">
+        <p>{p.label}</p>
+        <span>{p.week}</span>
+      </div>
+    )
+  }
+
   return (
-    <div>
-      <h1>Security Education Chat App</h1>
+    <div className="app-shell">
+
+      {/* Banner */}
+      <header className="banner">
+        <div className="banner-icon">
+          <i className="ti ti-shield-lock" aria-hidden="true" />
+        </div>
+        <div className="banner-text">
+          <span className="banner-title">CipherPath</span>
+          <span className="banner-tagline">Layers of security in digital communication</span>
+        </div>
+        <div className="banner-spacer" />
+      </header>
+
+      <div className="app-body">
+
+        {/* Sidebar */}
+        <Sidebar currentLevel={currentLevel} onSelectLevel={setCurrentLevel} />
+
+        {/* Main */}
+        <div className="level-container">
+
+          {/* Tabs */}
+          <div className="tabs-bar">
+            <button
+              className={`tab-btn ${activeTab === 'simulator' ? 'active' : ''}`}
+              onClick={() => setActiveTab('simulator')}
+            >
+              <i className="ti ti-player-play" aria-hidden="true" style={{ fontSize: 14 }} />
+              Simulator
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'threat' ? 'active' : ''}`}
+              onClick={() => setActiveTab('threat')}
+            >
+              <i className="ti ti-list-details" aria-hidden="true" style={{ fontSize: 14 }} />
+              Threat model
+            </button>
+          </div>
+
+          {/* Tab content */}
+          <div className="tab-content">
+            {activeTab === 'simulator'
+              ? renderSimulator()
+              : <ThreatModel level={currentLevel} />
+            }
+          </div>
+
+        </div>
+      </div>
     </div>
   )
 }
