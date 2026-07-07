@@ -57,8 +57,12 @@ export function computeSharedSecret(myPrivateKey, theirPublicKey) {
   return modPow(theirPublicKey, myPrivateKey, PRIME)
 }
 
-/** Big-endian byte encoding of a BigInt (used for hashing — never sent over the wire). */
-function bigIntToBytes(big) {
+/**
+ * Big-endian byte encoding of a BigInt. Used for hashing into an AES key (never sent over
+ * the wire), and, as of Level 4, as the exact bytes that get signed/verified — the signature
+ * authenticates "this specific DH public value", not just "some message from Alice".
+ */
+export function bigIntToBytes(big) {
   let hex = big.toString(16)
   if (hex.length % 2) hex = '0' + hex
   const bytes = new Uint8Array(hex.length / 2)

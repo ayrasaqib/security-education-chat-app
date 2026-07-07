@@ -4,10 +4,10 @@ import ThreatModel from './components/ThreatModel'
 import Level1 from './levels/Level1/Level1'
 import Level2 from './levels/Level2/Level2'
 import Level3 from './levels/Level3/Level3'
+import Level4 from './levels/Level4/Level4'
 import './App.css'
 
 const placeholderLevels = {
-  4: { label: 'Level 4 — Authentication',    week: 'Week 5' },
   5: { label: 'Level 5 — Integrity / HMAC',  week: 'Week 6' },
   6: { label: 'Level 6 — Defence in depth',  week: 'Week 7' },
 }
@@ -20,6 +20,7 @@ function App() {
     if (currentLevel === 1) return <Level1 />
     if (currentLevel === 2) return <Level2 />
     if (currentLevel === 3) return <Level3 />
+    if (currentLevel === 4) return <Level4 />
     const p = placeholderLevels[currentLevel]
     return (
       <div className="placeholder">
