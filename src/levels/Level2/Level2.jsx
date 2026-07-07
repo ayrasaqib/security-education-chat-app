@@ -12,6 +12,21 @@ function Level2() {
   const [ready, setReady] = useState(false)
   const keyRef = useRef(null)
   const msgId = useRef(1)
+  const aliceScrollRef = useRef(null)
+  const bobScrollRef = useRef(null)
+  const eveScrollRef = useRef(null)
+
+  useEffect(() => {
+    if (aliceScrollRef.current) aliceScrollRef.current.scrollTop = aliceScrollRef.current.scrollHeight
+  }, [aliceMsgs])
+
+  useEffect(() => {
+    if (bobScrollRef.current) bobScrollRef.current.scrollTop = bobScrollRef.current.scrollHeight
+  }, [bobMsgs])
+
+  useEffect(() => {
+    if (eveScrollRef.current) eveScrollRef.current.scrollTop = eveScrollRef.current.scrollHeight
+  }, [eveMsgs])
 
   // Simulate a pre-shared key already sitting on both Alice's and Bob's
   // machines. Level 3 replaces this assumption with a real key exchange.
@@ -99,7 +114,7 @@ function Level2() {
 
         <div className="chat-col">
           <h3 className="col-heading">Alice</h3>
-          <div className="messages">
+          <div className="messages" ref={aliceScrollRef}>
             {aliceMsgs.length === 0 && (
               <div className="empty-alice">Waiting for messages…</div>
             )}
@@ -114,7 +129,7 @@ function Level2() {
             <div className="dot" /> Eve (eavesdropping)
           </div>
           <h3 className="col-heading eve">Intercepted (ciphertext)</h3>
-          <div className="messages">
+          <div className="messages" ref={eveScrollRef}>
             {eveMsgs.length === 0 && (
               <div className="empty-eve">Waiting for traffic…</div>
             )}
@@ -131,7 +146,7 @@ function Level2() {
 
         <div className="chat-col">
           <h3 className="col-heading">Bob</h3>
-          <div className="messages">
+          <div className="messages" ref={bobScrollRef}>
             {bobMsgs.length === 0 && (
               <div className="empty-bob">Waiting for messages…</div>
             )}

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import './Level1.css'
 
 function Level1() {
@@ -8,6 +8,21 @@ function Level1() {
   const [input, setInput] = useState('')
   const [sender, setSender] = useState('alice')
   const msgId = useRef(1)
+  const aliceScrollRef = useRef(null)
+  const bobScrollRef = useRef(null)
+  const eveScrollRef = useRef(null)
+
+  useEffect(() => {
+    if (aliceScrollRef.current) aliceScrollRef.current.scrollTop = aliceScrollRef.current.scrollHeight
+  }, [aliceMsgs])
+
+  useEffect(() => {
+    if (bobScrollRef.current) bobScrollRef.current.scrollTop = bobScrollRef.current.scrollHeight
+  }, [bobMsgs])
+
+  useEffect(() => {
+    if (eveScrollRef.current) eveScrollRef.current.scrollTop = eveScrollRef.current.scrollHeight
+  }, [eveMsgs])
 
   function sendMsg() {
     const text = input.trim()
@@ -42,7 +57,7 @@ function Level1() {
 
         <div className="chat-col">
           <h3 className="col-heading">Alice</h3>
-          <div className="messages">
+          <div className="messages" ref={aliceScrollRef}>
             {aliceMsgs.length === 0 && (
               <div className="empty-alice">Waiting for messages…</div>
             )}
@@ -58,7 +73,7 @@ function Level1() {
             <div className="dot" /> Eve (eavesdropping)
           </div>
           <h3 className="col-heading eve">Intercepted</h3>
-          <div className="messages">
+          <div className="messages" ref={eveScrollRef}>
             {eveMsgs.length === 0 && (
               <div className="empty-eve">Waiting for traffic…</div>
             )}
@@ -72,7 +87,7 @@ function Level1() {
 
         <div className="chat-col">
           <h3 className="col-heading">Bob</h3>
-          <div className="messages">
+          <div className="messages" ref={bobScrollRef}>
             {bobMsgs.length === 0 && (
               <div className="empty-bob">Waiting for messages…</div>
             )}
