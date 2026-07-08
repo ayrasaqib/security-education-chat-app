@@ -123,8 +123,58 @@
   text-transform: uppercase;
   letter-spacing: .06em;
   padding-bottom: 4px;
-  border-bottom: 1px solid #eee;
   flex-shrink: 0;
+}
+
+.col-heading-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 4px;
+  flex-shrink: 0;
+}
+
+.col-heading-row .col-heading {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+/* Live "last seen" counter for whichever sender this column receives from — ticks up in real
+   time as messages are accepted, so the reader can watch the receiver-side state change. */
+.counter-chip {
+  font-size: 10.5px;
+  font-family: monospace;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border: 1px solid #dbeafe;
+  border-radius: 99px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.counter-chip strong {
+  font-weight: 700;
+}
+
+/* Per-message readout of the sequence check: green when the message's number matched what the
+   counter expected and it advanced, red when it didn't and the counter held where it was. */
+.seq-badge {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+  font-family: monospace;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+
+.seq-badge.match {
+  color: #15803d;
+}
+
+.seq-badge.mismatch {
+  color: #b91c1c;
 }
 
 .col-heading.eve {

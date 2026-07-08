@@ -37,6 +37,12 @@ function Level6() {
   const [aliceFingerprint, setAliceFingerprint] = useState('')
   const [bobFingerprint, setBobFingerprint] = useState('')
 
+  // Reactive mirrors of the two "last seen" counters below, purely so the UI can visibly show them
+  // ticking up. The refs remain the source of truth the async delivery logic checks against —
+  // state alone would risk a stale value being read mid-await.
+  const [lastSeenFromAlice, setLastSeenFromAlice] = useState(0) // Bob's counter for Alice's messages
+  const [lastSeenFromBob, setLastSeenFromBob] = useState(0)     // Alice's counter for Bob's messages
+
   const aliceIdentityRef = useRef(null) // long-term ECDSA keypair, generated once
   const bobIdentityRef = useRef(null)
   const aesKeyRef = useRef(null)  // derived per exchange — confidentiality
@@ -83,6 +89,8 @@ function Level6() {
     bobSeqRef.current = 0
     lastSeenFromAliceRef.current = 0
     lastSeenFromBobRef.current = 0
+    setLastSeenFromAlice(0)
+    setLastSeenFromBob(0)
 
     const aliceIdentity = aliceIdentityRef.current
     const bobIdentity = bobIdentityRef.current
@@ -176,8 +184,8 @@ function Level6() {
     if (stale()) return
 
     // 8. Level 6's own addition — no new key material, just a per-sender counter both sides now track.
-    addAlice('Resetting per-session sequence counter — my next message will be #1')
-    addBob('Resetting per-session sequence counter — my next message will be #1')
+    addAlice('Resetting per-session sequence number to 0')
+    addBob('Resetting per-session sequence number to 0')
     addEve('Can see ciphertext, MAC tags, and sequence numbers on every message, but has no key and cannot rewind either counter')
     await sleep(400)
     if (stale()) return
@@ -225,21 +233,28 @@ function Level6() {
   async function deliverMessage({ seq, ivHex, ciphertextB64, tagHex, fromAlice }) {
     const hmacKey = hmacKeyRef.current
     const aesKey = aesKeyRef.current
+    const setCounter = fromAlice ? setLastSeenFromAlice : setLastSeenFromBob
 
     const macBytes = encodeForMacWithSeq(seq, ivHex, ciphertextB64)
     const integrityOk = await verifyHmacHex(hmacKey, tagHex, macBytes)
     if (!integrityOk) {
-      return { ok: false, reason: '✕ HMAC verification failed — message discarded' }
+      const lastSeenRef = fromAlice ? lastSeenFromAliceRef : lastSeenFromBobRef
+      return { ok: false, reason: '✕ HMAC verification failed — message discarded', counterAfter: lastSeenRef.current }
     }
 
     const lastSeenRef = fromAlice ? lastSeenFromAliceRef : lastSeenFromBobRef
     if (isReplay(seq, lastSeenRef.current)) {
-      return { ok: false, reason: `✕ Replay detected — sequence #${seq} already seen, discarding` }
+      return {
+        ok: false,
+        reason: `✕ Replay detected — seqNum ${seq} already seen, discarding`,
+        counterAfter: lastSeenRef.current, // rejected — counter does NOT advance
+      }
     }
 
     lastSeenRef.current = seq
+    setCounter(seq) // reactive mirror, so the counter visibly ticks up next to the message
     const text = await decryptMessage(aesKey, ivHex, ciphertextB64)
-    return { ok: true, text }
+    return { ok: true, text, counterAfter: seq }
   }
 
   async function sendMsg() {
@@ -266,8 +281,8 @@ function Level6() {
 
     const sentMsg = { id, type: 'sent', text }
     const deliveredMsg = delivered.ok
-      ? { id: id + 0.1, type: 'received', text: delivered.text, verified: true }
-      : { id: id + 0.1, type: 'rejected', text: delivered.reason, verified: false }
+      ? { id: id + 0.1, type: 'received', text: delivered.text, verified: true, seq, ok: true, counterAfter: delivered.counterAfter }
+      : { id: id + 0.1, type: 'rejected', text: delivered.reason, verified: false, seq, ok: false, counterAfter: delivered.counterAfter }
     const eveMsg = {
       id: id + 0.2,
       type: 'attacker',
@@ -306,8 +321,8 @@ function Level6() {
 
     const id = msgId.current++
     const replayedMsg = result.ok
-      ? { id, type: 'received', text: result.text, verified: true }
-      : { id, type: 'rejected', text: result.reason, verified: false }
+      ? { id, type: 'received', text: result.text, verified: true, seq: m.seq, ok: true, counterAfter: result.counterAfter }
+      : { id, type: 'rejected', text: result.reason, verified: false, seq: m.seq, ok: false, counterAfter: result.counterAfter }
 
     if (m.fromAlice) {
       setBobMsgs(prev => [...prev, replayedMsg])
@@ -316,7 +331,7 @@ function Level6() {
     }
 
     addEve(
-      `↻ Replayed FROM: ${m.sender.toUpperCase()} seq #${m.seq} — ` +
+      `↻ Replayed FROM: ${m.sender.toUpperCase()} seqNum ${m.seq} — ` +
       (result.ok ? 'accepted (!)' : 'rejected by sequence check'),
       'capture'
     )
@@ -364,12 +379,20 @@ function Level6() {
       <div className="chat-area">
 
         <div className="chat-col">
-          <h3 className="col-heading">Alice</h3>
+          <div className="col-heading-row">
+            <h3 className="col-heading">Alice</h3>
+            <span className="counter-chip">Bob's Last Seen: <strong>{lastSeenFromBob}</strong></span>
+          </div>
           <div className="messages" ref={aliceScrollRef}>
             {aliceMsgs.map(m => (
               <div key={m.id} className={`msg ${m.type}`}>
                 {m.text}
                 {m.type === 'received' && <span className="mac-badge">✓ verified &amp; fresh</span>}
+                {typeof m.seq === 'number' && (
+                  <span className={`seq-badge ${m.ok ? 'match' : 'mismatch'}`}>
+                    seqNum {m.seq} {m.ok ? '=' : '✕'} counter {m.counterAfter}
+                  </span>
+                )}
               </div>
             ))}
           </div>
@@ -385,7 +408,7 @@ function Level6() {
               if (m.type === 'attacker') {
                 return (
                   <div key={m.id} className="msg attacker">
-                    [{m.ts}] FROM: {m.sender.toUpperCase()} · SEQ #{m.seq} · {m.bytes}B<br />
+                    [{m.ts}] FROM: {m.sender.toUpperCase()} · SEQNUM{m.seq} · {m.bytes}B<br />
                     <span className="cipher-label">IV</span> {m.ivHex}<br />
                     <span className="cipher-label">CT</span> {m.ciphertextB64}<br />
                     <span className="cipher-label">TAG</span> {macShortHex(m.tagHex, 24)}
@@ -402,12 +425,20 @@ function Level6() {
         </div>
 
         <div className="chat-col">
-          <h3 className="col-heading">Bob</h3>
+          <div className="col-heading-row">
+            <h3 className="col-heading">Bob</h3>
+            <span className="counter-chip">Alice's Last Seen: <strong>{lastSeenFromAlice}</strong></span>
+          </div>
           <div className="messages" ref={bobScrollRef}>
             {bobMsgs.map(m => (
               <div key={m.id} className={`msg ${m.type}`}>
                 {m.text}
                 {m.type === 'received' && <span className="mac-badge">✓ verified &amp; fresh</span>}
+                {typeof m.seq === 'number' && (
+                  <span className={`seq-badge ${m.ok ? 'match' : 'mismatch'}`}>
+                    seqNum {m.seq} {m.ok ? '=' : '✕'} counter {m.counterAfter}
+                  </span>
+                )}
               </div>
             ))}
           </div>
