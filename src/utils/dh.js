@@ -1,7 +1,7 @@
 // Diffie–Hellman key exchange over a standard 2048-bit MODP group (RFC 3526, Group 14).
 // This is a real safe prime used in production protocols (IKE/IPsec, SSH, TLS)
 // Level 3 removes Level 2's "pre-shared key" assumption: Alice and Bob now derive their
-// shared AES key live, over a channel Eve can watch, using only public values.
+// shared AES key live, over a channel Eve can watch.
 
 const PRIME_HEX = (
   'FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74' +

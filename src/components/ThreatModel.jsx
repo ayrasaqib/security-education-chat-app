@@ -32,8 +32,8 @@ function ThreatModel({ level }) {
       threat: 'Denial of service',
       attack: 'Replay attacks — attacker re-sends captured packets to confuse or duplicate actions',
       risk: 'med',
-      mitigatedAt: 5,
-      mitigation: 'Nonces / timestamps (Level 5)',
+      mitigatedAt: 6,
+      mitigation: 'Nonces / timestamps (Level 6)',
     },
     {
       threat: 'Elevation of privilege',

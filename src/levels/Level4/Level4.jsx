@@ -104,7 +104,7 @@ function Level4() {
     await sleep(STEP_DELAY_MS)
     if (stale()) return
 
-    // 2. Each side generates a fresh ephemeral DH keypair for this session
+    // 2. Each side generates a fresh temporary DH keypair for this session
     addAlice('Generating ephemeral private value a…')
     addBob('Generating ephemeral private value b…')
     await sleep(STEP_DELAY_MS)
@@ -135,8 +135,7 @@ function Level4() {
     await sleep(STEP_DELAY_MS)
     if (stale()) return
 
-    // 5. Each side verifies the signature against the sender's KNOWN identity public key —
-    //    this is the authentication step Level 3 didn't have.
+    // 5. Each side verifies the signature against the sender's known identity public key
     const aliceVerifiedBob = await verifyBytes(bobIdentity.publicKey, sigB, bBytes)
     const bobVerifiedAlice = await verifyBytes(aliceIdentity.publicKey, sigA, aBytes)
 
@@ -158,7 +157,7 @@ function Level4() {
       return
     }
 
-    // 6. Only now, having authenticated the source of each public value, compute the shared secret
+    // 6. After authenticating the source of each public value, compute the shared secret
     const sharedAlice = computeSharedSecret(alice.privateKey, bob.publicKey)
     const sharedBob = computeSharedSecret(bob.privateKey, alice.publicKey)
 
