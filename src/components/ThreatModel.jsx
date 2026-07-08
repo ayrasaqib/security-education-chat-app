@@ -33,15 +33,15 @@ function ThreatModel({ level }) {
       attack: 'Replay attacks — attacker re-sends captured packets to confuse or duplicate actions',
       risk: 'med',
       mitigatedAt: 6,
-      mitigation: 'Nonces / timestamps (Level 6)',
+      mitigation: 'Sequence numbers (Level 6)',
     },
-    {
-      threat: 'Elevation of privilege',
-      attack: 'Attacker reads credentials sent in plaintext to gain higher access',
-      risk: 'high',
-      mitigatedAt: 2,
-      mitigation: 'Encryption + authentication',
-    },
+    // {
+    //   threat: 'Elevation of privilege',
+    //   attack: 'Attacker reads credentials sent in plaintext to gain higher access',
+    //   risk: 'high',
+    //   mitigatedAt: 2,
+    //   mitigation: 'Encryption + authentication',
+    // },
   ]
 
   function getRiskStatus(risk, mitigatedAt) {

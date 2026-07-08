@@ -1,28 +1,29 @@
 const levels = [
   { id: 1, label: 'Level 1', sub: 'Plaintext',        icon: 'ti-message-dots' },
-  { id: 2, label: 'Level 2', sub: 'AES encryption',   icon: 'ti-lock' },
-  { id: 3, label: 'Level 3', sub: 'Key exchange',     icon: 'ti-arrows-exchange' },
-  { id: 4, label: 'Level 4', sub: 'Authentication',   icon: 'ti-shield-check' },
-  { id: 5, label: 'Level 5', sub: 'Integrity (HMAC)', icon: 'ti-fingerprint' },
-  { id: 6, label: 'Level 6', sub: 'Defence in depth', icon: 'ti-stack-2' },
+  { id: 2, label: 'Level 2', sub: 'AES Encryption',   icon: 'ti-lock' },
+  { id: 3, label: 'Level 3', sub: 'DH Key Exchange',     icon: 'ti-arrows-exchange' },
+  { id: 4, label: 'Level 4', sub: 'ECDSA Authentication',   icon: 'ti-shield-check' },
+  { id: 5, label: 'Level 5', sub: 'HMAC Integrity', icon: 'ti-fingerprint' },
+  { id: 6, label: 'Level 6', sub: 'In-Sequence Messages', icon: 'ti-list-numbers' },
 ]
 
 // Which protections are in effect at each level. Used to drive the
 // "Active controls" indicator so it reflects whatever level is selected.
 const protectionsByLevel = {
-  1: { confidentiality: false, authentication: false, integrity: false, secureKeys: false },
-  2: { confidentiality: true,  authentication: false, integrity: false, secureKeys: false },
-  3: { confidentiality: true,  authentication: false, integrity: false, secureKeys: true  },
-  4: { confidentiality: true,  authentication: true,  integrity: false, secureKeys: true  },
-  5: { confidentiality: true,  authentication: true,  integrity: true,  secureKeys: true  },
-  6: { confidentiality: true,  authentication: true,  integrity: true,  secureKeys: true  },
+  1: { confidentiality: false, authentication: false, integrity: false, secureKeys: false, replayProtection: false },
+  2: { confidentiality: true,  authentication: false, integrity: false, secureKeys: false, replayProtection: false },
+  3: { confidentiality: true,  authentication: false, integrity: false, secureKeys: true,  replayProtection: false },
+  4: { confidentiality: true,  authentication: true,  integrity: false, secureKeys: true,  replayProtection: false },
+  5: { confidentiality: true,  authentication: true,  integrity: true,  secureKeys: true,  replayProtection: false },
+  6: { confidentiality: true,  authentication: true,  integrity: true,  secureKeys: true,  replayProtection: true  },
 }
 
 const protectionLabels = [
-  { key: 'confidentiality', label: 'Confidentiality' },
-  { key: 'authentication',  label: 'Authentication'  },
-  { key: 'integrity',       label: 'Integrity'       },
-  { key: 'secureKeys',      label: 'Secure Keys'     },
+  { key: 'confidentiality',  label: 'Confidentiality'   },
+  { key: 'authentication',   label: 'Authentication'    },
+  { key: 'integrity',        label: 'Integrity'         },
+  { key: 'secureKeys',       label: 'Secure Keys'       },
+  { key: 'replayProtection', label: 'Replay Protection' },
 ]
 
 function Sidebar({ currentLevel, onSelectLevel }) {

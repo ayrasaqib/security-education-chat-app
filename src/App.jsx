@@ -6,11 +6,8 @@ import Level2 from './levels/Level2/Level2'
 import Level3 from './levels/Level3/Level3'
 import Level4 from './levels/Level4/Level4'
 import Level5 from './levels/Level5/Level5'
+import Level6 from './levels/Level6/Level6'
 import './App.css'
-
-const placeholderLevels = {
-  6: { label: 'Level 6 — Defence in depth',  week: 'Week 7' },
-}
 
 function App() {
   const [currentLevel, setCurrentLevel] = useState(1)
@@ -22,13 +19,7 @@ function App() {
     if (currentLevel === 3) return <Level3 />
     if (currentLevel === 4) return <Level4 />
     if (currentLevel === 5) return <Level5 />
-    const p = placeholderLevels[currentLevel]
-    return (
-      <div className="placeholder">
-        <p>{p.label}</p>
-        <span>{p.week}</span>
-      </div>
-    )
+    if (currentLevel === 6) return <Level6 />
   }
 
   return (
