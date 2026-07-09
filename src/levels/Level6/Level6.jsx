@@ -467,8 +467,8 @@ function Level6() {
         <p>
           Every layer from Levels 2–5 is active here: Diffie-Hellman gives Alice and Bob a shared
           secret Eve can't derive; ECDSA signatures on the DH values stop her from impersonating
-          either side; AES-256-GCM hides message content; HMAC-SHA256 (keyed independently of the
-          AES key) catches any altered ciphertext.
+          either side; AES-256-CTR hides message content; HMAC-SHA256 (keyed independently of the
+          AES key) catches any altered ciphertext that CTR mode alone would silently accept.
         </p>
       </div>
     </div>

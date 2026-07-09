@@ -1,10 +1,16 @@
-// AES-256-GCM helpers built on the browser's native Web Crypto API (SubtleCrypto).
-// Eve intercepts encrypted text (ciphertext) in the UI
+// AES-256-CTR helpers built on the browser's native Web Crypto API (SubtleCrypto).
+//
+// CTR is a stream-cipher mode: it XORs the plaintext with a keystream generated from the
+// key + counter block, block by block, with no chaining between blocks and no built-in
+// authentication tag (unlike AES-GCM). That's a deliberate choice for this level range —
+// confidentiality is provided, but nothing here detects tampering, which is what makes the
+// tampering attack demo possible before Level 5 introduces HMAC as the fix.
 
-const ALGO = 'AES-GCM'
-const IV_LENGTH_BYTES = 12 // 96-bit IV, recommended size for AES-GCM
+const ALGO = 'AES-CTR'
+const COUNTER_LENGTH_BYTES = 16 // AES-CTR requires a full 16-byte initial counter block
+const COUNTER_BITS = 64 // how many of those 128 bits are treated as the counter portion
 
-/** Generate a fresh random AES-256-GCM key. */
+/** Generate a fresh random AES-256-CTR key. */
 export async function generateAesKey() {
   return crypto.subtle.generateKey({ name: ALGO, length: 256 }, true, ['encrypt', 'decrypt'])
 }
@@ -16,17 +22,19 @@ export async function exportKeyHex(key) {
 }
 
 /**
- * Encrypt plaintext with AES-GCM.
+ * Encrypt plaintext with AES-CTR.
  * Returns { ivHex, ciphertextB64 } — both safe to display/transmit as "network traffic".
+ * ivHex here is the random initial counter block (still labelled "IV" in the UI, since that's
+ * the familiar term, but it's 16 bytes rather than GCM's 12-byte IV).
  */
 export async function encryptMessage(key, plaintext) {
-  const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH_BYTES))
+  const counter = crypto.getRandomValues(new Uint8Array(COUNTER_LENGTH_BYTES))
   const encoded = new TextEncoder().encode(plaintext)
 
-  const ciphertextBuf = await crypto.subtle.encrypt({ name: ALGO, iv }, key, encoded)
+  const ciphertextBuf = await crypto.subtle.encrypt({ name: ALGO, counter, length: COUNTER_BITS }, key, encoded)
 
   return {
-    ivHex: bufferToHex(iv),
+    ivHex: bufferToHex(counter),
     ciphertextB64: bufferToBase64(ciphertextBuf),
     ciphertextBytes: ciphertextBuf.byteLength,
   }
@@ -34,14 +42,16 @@ export async function encryptMessage(key, plaintext) {
 
 /**
  * Decrypt a { ivHex, ciphertextB64 } pair back to plaintext.
- * Throws if the key is wrong or the ciphertext has been tampered with
- * (GCM's built-in authentication tag will fail to verify).
+ * Unlike GCM, CTR mode has no authentication tag: decryption never throws on tampered
+ * ciphertext. Flipping a ciphertext bit flips the exact corresponding plaintext bit and
+ * decryption "succeeds" with silently altered content — that gap is intentional here, and
+ * is exactly what Level 5's HMAC tag is introduced to close.
  */
 export async function decryptMessage(key, ivHex, ciphertextB64) {
-  const iv = hexToBuffer(ivHex)
+  const counter = hexToBuffer(ivHex)
   const ciphertext = base64ToBuffer(ciphertextB64)
 
-  const plainBuf = await crypto.subtle.decrypt({ name: ALGO, iv }, key, ciphertext)
+  const plainBuf = await crypto.subtle.decrypt({ name: ALGO, counter, length: COUNTER_BITS }, key, ciphertext)
   return new TextDecoder().decode(plainBuf)
 }
 

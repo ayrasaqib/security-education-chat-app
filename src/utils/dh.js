@@ -71,14 +71,14 @@ export function bigIntToBytes(big) {
 }
 
 /**
- * Derive a usable AES-256-GCM key from the raw DH shared secret.
+ * Derive a usable AES-256-CTR key from the raw DH shared secret.
  * The raw secret is never used as key material directly — it's hashed first, the same
  * basic idea real protocols use (HKDF) to turn a DH output into a symmetric key.
  */
 export async function deriveAesKeyFromSharedSecret(sharedSecret) {
   const raw = bigIntToBytes(sharedSecret)
   const hash = await crypto.subtle.digest('SHA-256', raw)
-  return crypto.subtle.importKey('raw', hash, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt'])
+  return crypto.subtle.importKey('raw', hash, { name: 'AES-CTR' }, true, ['encrypt', 'decrypt'])
 }
 
 /** Truncated hex for display — these are 2048-bit / 256-bit numbers, far too long to show in full. */
