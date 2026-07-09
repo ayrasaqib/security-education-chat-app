@@ -2,19 +2,29 @@ import { useState, useRef, useEffect } from 'react'
 import { generateAesKey, exportKeyHex, encryptMessage, decryptMessage } from '../../utils/crypto'
 import './Level2.css'
 
+const STEP_DELAY_MS = 550
+
 function Level2() {
   const [aliceMsgs, setAliceMsgs] = useState([])
   const [bobMsgs, setBobMsgs] = useState([])
   const [eveMsgs, setEveMsgs] = useState([])
   const [input, setInput] = useState('')
   const [sender, setSender] = useState('alice')
-  const [keyHex, setKeyHex] = useState('')
-  const [ready, setReady] = useState(false)
+  const [status, setStatus] = useState('exchanging') // 'exchanging' | 'ready'
+
   const keyRef = useRef(null)
   const msgId = useRef(1)
+  const runIdRef = useRef(0) // guards against a stale run still writing state after "New exchange" or unmount
   const aliceScrollRef = useRef(null)
   const bobScrollRef = useRef(null)
   const eveScrollRef = useRef(null)
+
+  useEffect(() => {
+    runKeyExchange()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { runIdRef.current++ } // invalidate any in-flight run on unmount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (aliceScrollRef.current) aliceScrollRef.current.scrollTop = aliceScrollRef.current.scrollHeight
@@ -28,33 +38,69 @@ function Level2() {
     if (eveScrollRef.current) eveScrollRef.current.scrollTop = eveScrollRef.current.scrollHeight
   }, [eveMsgs])
 
-  // Simulate a pre-shared key already sitting on both Alice's and Bob's
-  // machines. Level 3 replaces this assumption with a real key exchange.
-  useEffect(() => {
-    let cancelled = false
-    generateAesKey().then(async key => {
-      if (cancelled) return
-      keyRef.current = key
-      setKeyHex(await exportKeyHex(key))
-      setReady(true)
-    })
-    return () => { cancelled = true }
-  }, [])
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms))
+  }
 
-  async function regenerateKey() {
-    setReady(false)
-    const key = await generateAesKey()
-    keyRef.current = key
-    setKeyHex(await exportKeyHex(key))
+  function addAlice(text, type = 'step') {
+    setAliceMsgs(prev => [...prev, { id: msgId.current++, type, text }])
+  }
+  function addBob(text, type = 'step') {
+    setBobMsgs(prev => [...prev, { id: msgId.current++, type, text }])
+  }
+  function addEve(text, type = 'capture') {
+    setEveMsgs(prev => [...prev, { id: msgId.current++, type, text }])
+  }
+
+  /**
+   * Naive key exchange: Alice generates a real AES-256 session key and sends
+   * it to Bob AS-IS over the same insecure channel Eve is sniffing. Unlike
+   * Level 3's Diffie–Hellman exchange (where Eve only ever sees public values
+   * and still can't derive the secret), here the literal key crosses the wire
+   * — so Eve's capture below is not a partial leak, it's the whole key.
+   */
+  async function runKeyExchange() {
+    const myRun = ++runIdRef.current
+    const stale = () => runIdRef.current !== myRun
+
+    setStatus('exchanging')
     setAliceMsgs([])
     setBobMsgs([])
     setEveMsgs([])
-    setReady(true)
+
+    addAlice('Generating AES-256 session key locally…')
+    await sleep(STEP_DELAY_MS)
+    if (stale()) return
+
+    const key = await generateAesKey()
+    const keyHex = await exportKeyHex(key)
+    if (stale()) return
+    keyRef.current = key
+    addAlice(`Key generated: ${keyHex.slice(0, 16)}…`)
+    await sleep(STEP_DELAY_MS)
+    if (stale()) return
+
+    addAlice('Sending session key to Bob →')
+    await sleep(STEP_DELAY_MS)
+    if (stale()) return
+
+    // The key is transmitted in full, in the clear — Eve captures all of it.
+    addEve(`Intercepted session key (full): ${keyHex}`, 'capture-key')
+    await sleep(STEP_DELAY_MS)
+    if (stale()) return
+
+    addBob(`Received session key from Alice: ${keyHex.slice(0, 16)}…`)
+    await sleep(STEP_DELAY_MS)
+    if (stale()) return
+
+    addAlice('Channel ready — you can chat now.', 'ready-note')
+    addBob('Channel ready — you can chat now.', 'ready-note')
+    setStatus('ready')
   }
 
   async function sendMsg() {
     const text = input.trim()
-    if (!text || !ready) return
+    if (!text || status !== 'ready') return
 
     const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     const id = msgId.current++
@@ -97,17 +143,14 @@ function Level2() {
   return (
     <div className="level2">
 
-      <div className="key-panel">
-        <div className="key-panel-label">
+      <div className="handshake-bar">
+        <div className="handshake-label">
           <i className="ti ti-key" aria-hidden="true" />
-          Pre-shared symmetric key (AES-256-CTR)
+          Naive key exchange (AES-256-CTR) {status === 'exchanging' ? '— in progress…' : '— complete'}
         </div>
-        <code className="key-value">{keyHex ? `${keyHex.slice(0, 32)}…` : 'generating…'}</code>
-        <button className="key-regen" onClick={regenerateKey}>Rotate key</button>
-        <span className="key-caveat">
-          Held by Alice &amp; Bob before the conversation starts — not exchanged over this channel.
-          Level 3 removes this assumption with Diffie–Hellman key exchange.
-        </span>
+        <button className="handshake-redo" onClick={runKeyExchange} disabled={status === 'exchanging'}>
+          New exchange
+        </button>
       </div>
 
       <div className="chat-area">
@@ -115,9 +158,6 @@ function Level2() {
         <div className="chat-col">
           <h3 className="col-heading">Alice</h3>
           <div className="messages" ref={aliceScrollRef}>
-            {aliceMsgs.length === 0 && (
-              <div className="empty-alice">Waiting for messages…</div>
-            )}
             {aliceMsgs.map(m => (
               <div key={m.id} className={`msg ${m.type}`}>{m.text}</div>
             ))}
@@ -128,28 +168,29 @@ function Level2() {
           <div className="sniff-indicator">
             <div className="dot" /> Eve (eavesdropping)
           </div>
-          <h3 className="col-heading eve">Intercepted (ciphertext)</h3>
+          <h3 className="col-heading eve">
+            Intercepted
+          </h3>
           <div className="messages" ref={eveScrollRef}>
-            {eveMsgs.length === 0 && (
-              <div className="empty-eve">Waiting for traffic…</div>
-            )}
-            {eveMsgs.map(m => (
-              <div key={m.id} className="msg attacker">
-                [{m.ts}] FROM: {m.sender.toUpperCase()} · {m.bytes}B<br />
-                <span className="cipher-label">IV</span> {m.ivHex}<br />
-                <span className="cipher-label">CT</span> {m.ciphertextB64}
-                <div className="cannot-read">✕ cannot read plaintext</div>
-              </div>
-            ))}
+            {eveMsgs.map(m => {
+              if (m.type === 'attacker') {
+                return (
+                  <div key={m.id} className="msg attacker">
+                    [{m.ts}] FROM: {m.sender.toUpperCase()} · {m.bytes}B<br />
+                    <span className="cipher-label">IV</span> {m.ivHex}<br />
+                    <span className="cipher-label">CT</span> {m.ciphertextB64}
+                    <div className="cannot-read">✕ cannot read plaintext</div>
+                  </div>
+                )
+              }
+              return <div key={m.id} className={`msg ${m.type}`}>{m.text}</div>
+            })}
           </div>
         </div>
 
         <div className="chat-col">
           <h3 className="col-heading">Bob</h3>
           <div className="messages" ref={bobScrollRef}>
-            {bobMsgs.length === 0 && (
-              <div className="empty-bob">Waiting for messages…</div>
-            )}
             {bobMsgs.map(m => (
               <div key={m.id} className={`msg ${m.type}`}>{m.text}</div>
             ))}
@@ -168,10 +209,10 @@ function Level2() {
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={handleKey}
-          placeholder={ready ? 'Type a message — encrypted before it leaves the sender…' : 'Generating key…'}
-          disabled={!ready}
+          placeholder={status === 'ready' ? 'Type a message — encrypted with the exposed key…' : 'Exchanging key…'}
+          disabled={status !== 'ready'}
         />
-        <button onClick={sendMsg} disabled={!ready}>Send</button>
+        <button onClick={sendMsg} disabled={status !== 'ready'}>Send</button>
       </div>
 
       <div className="info-panel">
@@ -190,3 +231,4 @@ function Level2() {
 }
 
 export default Level2
+
