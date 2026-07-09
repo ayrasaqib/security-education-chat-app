@@ -25,8 +25,9 @@ function ThreatModel({ level }) {
       threat: 'Information disclosure',
       attack: 'Passive eavesdropping — full message content readable by anyone on the network',
       risk: 'critical',
-      mitigatedAt: 2,
-      mitigation: 'AES encryption (Level 2)',
+      partialAt: 2,
+      mitigatedAt: 3,
+      mitigation: 'Encryption (Level 2) + secure key exchange (Level 3)',
     },
     {
       threat: 'Denial of service',
@@ -44,9 +45,12 @@ function ThreatModel({ level }) {
     // },
   ]
 
-  function getRiskStatus(risk, mitigatedAt) {
+  function getRiskStatus(risk, partialAt, mitigatedAt) {
     if (level >= mitigatedAt) {
       return { className: 'risk-low', label: 'Low' }
+    }
+    if (partialAt && level >= partialAt) {
+      return { className: 'risk-med', label: 'Medium' }
     }
     if (risk === 'critical') {
       return { className: 'risk-critical', label: 'Critical' }
@@ -79,7 +83,7 @@ function ThreatModel({ level }) {
         </thead>
         <tbody>
           {threats.map(t => {
-            const { className, label } = getRiskStatus(t.risk, t.mitigatedAt)
+            const { className, label } = getRiskStatus(t.risk, t.partialAt, t.mitigatedAt)
             return (
               <tr key={t.threat}>
                 <td><strong>{t.threat}</strong></td>
