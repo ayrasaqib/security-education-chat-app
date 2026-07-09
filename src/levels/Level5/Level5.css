@@ -5,46 +5,38 @@
   min-height: 0;
 }
 
-/* ── Identity key panel (Level 4 only) ── */
-.identity-panel {
+/* ── Identity fingerprint, shown inline next to each column heading ── */
+.col-heading-row {
   display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 10px 16px;
-  background: #eff6ff;
-  border-bottom: 1px solid #dbeafe;
-  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 4px;
+  flex-shrink: 0;
 }
 
-.identity-item {
+.col-heading-row .col-heading {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.identity-chip {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: 4px;
+  font-size: 10.5px;
+  font-family: monospace;
   color: #1d4ed8;
+  background: #eff6ff;
+  border: 1px solid #dbeafe;
+  border-radius: 99px;
+  padding: 2px 8px;
   white-space: nowrap;
 }
 
-.identity-label {
-  font-weight: 500;
-}
-
-.identity-value {
-  font-family: monospace;
-  font-size: 12px;
-  background: #fff;
-  border: 1px solid #dbeafe;
-  border-radius: 6px;
-  padding: 3px 8px;
-  color: #1e3a8a;
-}
-
-.identity-caveat {
+.identity-chip i {
   font-size: 11px;
-  color: #6b7280;
-  line-height: 1.4;
-  flex: 1;
-  min-width: 220px;
 }
 
 /* ── Handshake status bar ── */

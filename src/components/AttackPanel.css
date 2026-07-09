@@ -1,0 +1,77 @@
+.attack-panel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: #fdf4ff;
+  border-bottom: 1px solid #f3e8ff;
+  flex-wrap: wrap;
+}
+
+.attack-panel-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #7e22ce;
+  white-space: nowrap;
+}
+
+.attack-select {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid #e9d5ff;
+  background: #fff;
+  color: #581c87;
+  font-family: inherit;
+}
+
+.attack-run-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: 99px;
+  border: 1px solid #c084fc;
+  background: #fff;
+  color: #7e22ce;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.attack-run-btn i {
+  font-size: 12px;
+}
+
+.attack-run-btn:hover:not(:disabled) {
+  background: #f3e8ff;
+}
+
+.attack-run-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.attack-result {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+
+.attack-result.success {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
+.attack-result.blocked {
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #bbf7d0;
+}

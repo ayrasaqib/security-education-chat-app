@@ -16,9 +16,16 @@ import {
   bufferToHex,
   shortHex as sigShortHex,
 } from '../../utils/auth'
+import { forgeSubstituteKeys, verifyForgedValues } from '../../utils/mitm'
+import { useAttackPanel } from '../../hooks/useAttackPanel'
+import AttackPanel from '../../components/AttackPanel'
 import './Level4.css'
 
 const STEP_DELAY_MS = 550
+
+const ATTACKS = [
+  { id: 'mitm', label: 'MITM / Impersonation', available: true },
+]
 
 function Level4() {
   const [aliceMsgs, setAliceMsgs] = useState([])
@@ -29,6 +36,10 @@ function Level4() {
   const [status, setStatus] = useState('identities') // 'identities' | 'exchanging' | 'ready' | 'failed'
   const [aliceFingerprint, setAliceFingerprint] = useState('')
   const [bobFingerprint, setBobFingerprint] = useState('')
+
+  const {
+    selectedAttackId, setSelectedAttackId, attackRunning, attackResult, setAttackResult, runAttack,
+  } = useAttackPanel()
 
   const aliceIdentityRef = useRef(null) // long-term ECDSA keypair, generated once
   const bobIdentityRef = useRef(null)
@@ -53,7 +64,7 @@ function Level4() {
       bobIdentityRef.current = bob
       setAliceFingerprint(sigShortHex(await exportPublicKeyHex(alice.publicKey)))
       setBobFingerprint(sigShortHex(await exportPublicKeyHex(bob.publicKey)))
-      runHandshake()
+      runHandshake(false)
     })()
     return () => { cancelled = true; runIdRef.current++ } // invalidate any in-flight run on unmount
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -85,7 +96,7 @@ function Level4() {
     setEveMsgs(prev => [...prev, { id: msgId.current++, type, text }])
   }
 
-  async function runHandshake() {
+  async function runHandshake(underAttack) {
     const myRun = ++runIdRef.current
     const stale = () => runIdRef.current !== myRun
 
@@ -93,6 +104,7 @@ function Level4() {
     setAliceMsgs([])
     setBobMsgs([])
     setEveMsgs([])
+    setAttackResult(null)
 
     const aliceIdentity = aliceIdentityRef.current
     const bobIdentity = bobIdentityRef.current
@@ -100,13 +112,13 @@ function Level4() {
     // 1. Agree on public DH parameters
     addAlice(`Agreed public parameters — p (2048-bit prime), g = ${GENERATOR}`)
     addBob(`Agreed public parameters — p (2048-bit prime), g = ${GENERATOR}`)
-    addEve(`Intercepted: p (2048-bit), g = ${GENERATOR} — public by design, nothing secret yet`)
+    addEve(`Intercepted: p (2048-bit), g = ${GENERATOR}`)
     await sleep(STEP_DELAY_MS)
     if (stale()) return
 
     // 2. Each side generates a fresh temporary DH keypair for this session
-    addAlice('Generating ephemeral private value a…')
-    addBob('Generating ephemeral private value b…')
+    addAlice('Generating private value a…')
+    addBob('Generating private value b…')
     await sleep(STEP_DELAY_MS)
     if (stale()) return
 
@@ -117,9 +129,9 @@ function Level4() {
     await sleep(STEP_DELAY_MS)
     if (stale()) return
 
-    // 3. Each side signs its own DH public value with its long-term identity key
-    addAlice('Signing A with my identity key…')
-    addBob('Signing B with my identity key…')
+    // 3. Each side signs its own DH public value with its long-term identity private key
+    addAlice('Signing A with my identity private key…')
+    addBob('Signing B with my identity private key…')
     const aBytes = bigIntToBytes(alice.publicKey)
     const bBytes = bigIntToBytes(bob.publicKey)
     const sigA = await signBytes(aliceIdentity.privateKey, aBytes)
@@ -135,24 +147,56 @@ function Level4() {
     await sleep(STEP_DELAY_MS)
     if (stale()) return
 
+    let forged = null
+
+    if (underAttack) {
+      // Eve substitutes her own forged DH values in place of the real ones, but she has
+      // no way to sign them with Alice's or Bob's identity private key — the only signatures
+      // she has (sigA, sigB) were computed over the REAL public values, not her forged ones.
+      forged = forgeSubstituteKeys()
+
+      addEve('Substituting forged public values before forwarding — reusing the only signatures available (over the real values)')
+      await sleep(STEP_DELAY_MS)
+      if (stale()) return
+
+      addBob(`Received "A" from Alice (Eve) = ${shortHex(forged.forBob.publicKey, 16)}`)
+      addAlice(`Received "B" from Bob (Eve) = ${shortHex(forged.forAlice.publicKey, 16)}`)
+      await sleep(STEP_DELAY_MS)
+      if (stale()) return
+    }
+
     // 5. Each side verifies the signature against the sender's known identity public key
-    const aliceVerifiedBob = await verifyBytes(bobIdentity.publicKey, sigB, bBytes)
-    const bobVerifiedAlice = await verifyBytes(aliceIdentity.publicKey, sigA, aBytes)
+    const { aliceVerifiedBob, bobVerifiedAlice } = underAttack
+      ? await verifyForgedValues({
+          forged,
+          sigA,
+          sigB,
+          aliceIdentityPublicKey: aliceIdentity.publicKey,
+          bobIdentityPublicKey: bobIdentity.publicKey,
+        })
+      : {
+          aliceVerifiedBob: await verifyBytes(bobIdentity.publicKey, sigB, bBytes),
+          bobVerifiedAlice: await verifyBytes(aliceIdentity.publicKey, sigA, aBytes),
+        }
 
     addAlice(
       aliceVerifiedBob
         ? "✓ Verified B's signature against Bob's known identity key"
-        : "✕ Signature verification FAILED — rejecting this key"
+        : "✕ Signature verification FAILED — the value received doesn't match what was signed — rejecting"
     )
     addBob(
       bobVerifiedAlice
         ? "✓ Verified A's signature against Alice's known identity key"
-        : "✕ Signature verification FAILED — rejecting this key"
+        : "✕ Signature verification FAILED — the value received doesn't match what was signed — rejecting"
     )
     await sleep(STEP_DELAY_MS)
     if (stale()) return
 
     if (!aliceVerifiedBob || !bobVerifiedAlice) {
+      if (underAttack) {
+        addEve('Attack blocked — cannot forge a signature Alice or Bob will accept for a substituted value')
+        setAttackResult({ type: 'blocked', text: 'Attack blocked' })
+      }
       setStatus('failed')
       return
     }
@@ -179,6 +223,11 @@ function Level4() {
     addAlice('Secure, authenticated channel ready — you can chat now.', 'ready-note')
     addBob('Secure, authenticated channel ready — you can chat now.', 'ready-note')
     setStatus('ready')
+  }
+
+  function runMitmAttack() {
+    if (selectedAttackId !== 'mitm') return
+    runAttack(() => runHandshake(true))
   }
 
   async function sendMsg() {
@@ -225,22 +274,6 @@ function Level4() {
   return (
     <div className="level4">
 
-      <div className="identity-panel">
-        <div className="identity-item">
-          <i className="ti ti-shield-check" aria-hidden="true" />
-          <span className="identity-label">Alice's identity key</span>
-          <code className="identity-value">{aliceFingerprint || 'generating…'}</code>
-        </div>
-        <div className="identity-item">
-          <i className="ti ti-shield-check" aria-hidden="true" />
-          <span className="identity-label">Bob's identity key</span>
-          <code className="identity-value">{bobFingerprint || 'generating…'}</code>
-        </div>
-        <span className="identity-caveat">
-          Long-term identity private keys known to both parties in advance — Eve never has a copy of either.
-        </span>
-      </div>
-
       <div className="handshake-bar">
         <div className="handshake-label">
           <i className="ti ti-arrows-exchange" aria-hidden="true" />
@@ -250,15 +283,30 @@ function Level4() {
             '— in progress…'
           }
         </div>
-        <button className="handshake-redo" onClick={runHandshake} disabled={busy}>
+        <button className="handshake-redo" onClick={() => runHandshake(false)} disabled={busy}>
           New exchange
         </button>
       </div>
 
+      <AttackPanel
+        attacks={ATTACKS}
+        selectedAttackId={selectedAttackId}
+        onSelect={setSelectedAttackId}
+        onRun={runMitmAttack}
+        running={attackRunning}
+        disabled={attackRunning || busy}
+        result={attackResult}
+      />
+
       <div className="chat-area">
 
         <div className="chat-col">
-          <h3 className="col-heading">Alice</h3>
+          <div className="col-heading-row">
+            <h3 className="col-heading">Alice</h3>
+            <span className="identity-chip">
+              <i className="ti ti-shield-check" aria-hidden="true" /> Identity public key: {aliceFingerprint || 'generating…'}
+            </span>
+          </div>
           <div className="messages" ref={aliceScrollRef}>
             {aliceMsgs.map(m => (
               <div key={m.id} className={`msg ${m.type}`}>{m.text}</div>
@@ -289,7 +337,12 @@ function Level4() {
         </div>
 
         <div className="chat-col">
-          <h3 className="col-heading">Bob</h3>
+          <div className="col-heading-row">
+            <h3 className="col-heading">Bob</h3>
+            <span className="identity-chip">
+              <i className="ti ti-shield-check" aria-hidden="true" /> Identity public key: {bobFingerprint || 'generating…'}
+            </span>
+          </div>
           <div className="messages" ref={bobScrollRef}>
             {bobMsgs.map(m => (
               <div key={m.id} className={`msg ${m.type}`}>{m.text}</div>
@@ -318,12 +371,12 @@ function Level4() {
       <div className="info-panel">
         <h4>What's happening</h4>
         <p>
-          Before Alice and Bob trust each other's DH public value, each one is signed with the
-          sender's long-term identity public key and verified against a private version of that 
-          public key the other side already holds. Eve can watch every bit of this handshake —
-          the public values, both signatures, later the ciphertext — but she holds neither identity
-          private key, so she can't produce a signature Alice or Bob would accept, and she can't derive
-          the shared secret from public values alone.
+          Alice and Bob each have identity public keys known to both parties in advance while their private 
+          keys never leave their own side. Before Alice and Bob trust each other's DH public value, each one is signed
+          with the sender's identity private key and verified against the identity public key the other side
+          already holds. Eve can watch every bit of this handshake — the DH public values, both signatures,
+          later the ciphertext — but she holds neither identity private key, so she can't produce a
+          signature Alice or Bob would accept, and she can't derive the shared secret from public values alone.
         </p>
       </div>
     </div>

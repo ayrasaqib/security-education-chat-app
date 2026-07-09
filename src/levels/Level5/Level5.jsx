@@ -23,9 +23,16 @@ import {
   encodeForMac,
   shortHex as macShortHex,
 } from '../../utils/hmac'
+import { forgeSubstituteKeys, verifyForgedValues } from '../../utils/mitm'
+import { useAttackPanel } from '../../hooks/useAttackPanel'
+import AttackPanel from '../../components/AttackPanel'
 import './Level5.css'
 
 const STEP_DELAY_MS = 550
+
+const ATTACKS = [
+  { id: 'mitm', label: 'MITM / Impersonation', available: true },
+]
 
 function Level5() {
   const [aliceMsgs, setAliceMsgs] = useState([])
@@ -36,6 +43,10 @@ function Level5() {
   const [status, setStatus] = useState('identities') // 'identities' | 'exchanging' | 'ready' | 'failed'
   const [aliceFingerprint, setAliceFingerprint] = useState('')
   const [bobFingerprint, setBobFingerprint] = useState('')
+
+  const {
+    selectedAttackId, setSelectedAttackId, attackRunning, attackResult, setAttackResult, runAttack,
+  } = useAttackPanel()
 
   const aliceIdentityRef = useRef(null) // long-term ECDSA keypair, generated once
   const bobIdentityRef = useRef(null)
@@ -60,7 +71,7 @@ function Level5() {
       bobIdentityRef.current = bob
       setAliceFingerprint(sigShortHex(await exportPublicKeyHex(alice.publicKey)))
       setBobFingerprint(sigShortHex(await exportPublicKeyHex(bob.publicKey)))
-      runHandshake()
+      runHandshake(false)
     })()
     return () => { cancelled = true; runIdRef.current++ } // invalidate any in-flight run on unmount
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -92,7 +103,7 @@ function Level5() {
     setEveMsgs(prev => [...prev, { id: msgId.current++, type, text }])
   }
 
-  async function runHandshake() {
+  async function runHandshake(underAttack) {
     const myRun = ++runIdRef.current
     const stale = () => runIdRef.current !== myRun
 
@@ -100,6 +111,7 @@ function Level5() {
     setAliceMsgs([])
     setBobMsgs([])
     setEveMsgs([])
+    setAttackResult(null)
 
     const aliceIdentity = aliceIdentityRef.current
     const bobIdentity = bobIdentityRef.current
@@ -107,13 +119,13 @@ function Level5() {
     // 1. Agree on public DH parameters
     addAlice(`Agreed public parameters — p (2048-bit prime), g = ${GENERATOR}`)
     addBob(`Agreed public parameters — p (2048-bit prime), g = ${GENERATOR}`)
-    addEve(`Intercepted: p (2048-bit), g = ${GENERATOR} — public by design, nothing secret yet`)
+    addEve(`Intercepted: p (2048-bit), g = ${GENERATOR}`)
     await sleep(STEP_DELAY_MS)
     if (stale()) return
 
     // 2. Each side generates a fresh temporary DH keypair for this session
-    addAlice('Generating ephemeral private value a…')
-    addBob('Generating ephemeral private value b…')
+    addAlice('Generating private value a…')
+    addBob('Generating private value b…')
     await sleep(STEP_DELAY_MS)
     if (stale()) return
 
@@ -124,9 +136,9 @@ function Level5() {
     await sleep(STEP_DELAY_MS)
     if (stale()) return
 
-    // 3. Each side signs its own DH public value with its long-term identity key (Level 4's control)
-    addAlice('Signing A with my identity key…')
-    addBob('Signing B with my identity key…')
+    // 3. Each side signs its own DH public value with its long-term identity private key
+    addAlice('Signing A with my identity private key…')
+    addBob('Signing B with my identity private key…')
     const aBytes = bigIntToBytes(alice.publicKey)
     const bBytes = bigIntToBytes(bob.publicKey)
     const sigA = await signBytes(aliceIdentity.privateKey, aBytes)
@@ -142,24 +154,55 @@ function Level5() {
     await sleep(STEP_DELAY_MS)
     if (stale()) return
 
+    let forged = null
+
+    if (underAttack) {
+      // Same move as Level 4: substitute forged DH values, but the only signatures Eve has
+      // were computed over the real ones — she has neither identity's private key.
+      forged = forgeSubstituteKeys()
+
+      addEve('Substituting forged public values before forwarding — reusing the only signatures available (over the real values)')
+      await sleep(STEP_DELAY_MS)
+      if (stale()) return
+
+      addBob(`Received "A" from Alice = ${shortHex(forged.forBob.publicKey, 16)}  (this is actually Eve's)`)
+      addAlice(`Received "B" from Bob = ${shortHex(forged.forAlice.publicKey, 16)}  (this is actually Eve's)`)
+      await sleep(STEP_DELAY_MS)
+      if (stale()) return
+    }
+
     // 5. Each side verifies the signature against the sender's known identity public key
-    const aliceVerifiedBob = await verifyBytes(bobIdentity.publicKey, sigB, bBytes)
-    const bobVerifiedAlice = await verifyBytes(aliceIdentity.publicKey, sigA, aBytes)
+    const { aliceVerifiedBob, bobVerifiedAlice } = underAttack
+      ? await verifyForgedValues({
+          forged,
+          sigA,
+          sigB,
+          aliceIdentityPublicKey: aliceIdentity.publicKey,
+          bobIdentityPublicKey: bobIdentity.publicKey,
+        })
+      : {
+          aliceVerifiedBob: await verifyBytes(bobIdentity.publicKey, sigB, bBytes),
+          bobVerifiedAlice: await verifyBytes(aliceIdentity.publicKey, sigA, aBytes),
+        }
 
     addAlice(
       aliceVerifiedBob
         ? "✓ Verified B's signature against Bob's known identity key"
-        : "✕ Signature verification FAILED — rejecting this key"
+        : "✕ Signature verification FAILED — the value received doesn't match what was signed — rejecting"
     )
     addBob(
       bobVerifiedAlice
         ? "✓ Verified A's signature against Alice's known identity key"
-        : "✕ Signature verification FAILED — rejecting this key"
+        : "✕ Signature verification FAILED — the value received doesn't match what was signed — rejecting"
     )
     await sleep(STEP_DELAY_MS)
     if (stale()) return
 
     if (!aliceVerifiedBob || !bobVerifiedAlice) {
+      if (underAttack) {
+        addEve('Attack blocked — cannot forge a signature Alice or Bob will accept for a substituted value')
+        setAttackResult({ type: 'blocked', text: 'Attack blocked' })
+      }
       setStatus('failed')
       return
     }
@@ -197,6 +240,11 @@ function Level5() {
     addAlice('Secure, authenticated, integrity-protected channel ready — you can chat now.', 'ready-note')
     addBob('Secure, authenticated, integrity-protected channel ready — you can chat now.', 'ready-note')
     setStatus('ready')
+  }
+
+  function runMitmAttack() {
+    if (selectedAttackId !== 'mitm') return
+    runAttack(() => runHandshake(true))
   }
 
   async function sendMsg() {
@@ -257,22 +305,6 @@ function Level5() {
   return (
     <div className="level5">
 
-      <div className="identity-panel">
-        <div className="identity-item">
-          <i className="ti ti-shield-check" aria-hidden="true" />
-          <span className="identity-label">Alice's identity key</span>
-          <code className="identity-value">{aliceFingerprint || 'generating…'}</code>
-        </div>
-        <div className="identity-item">
-          <i className="ti ti-shield-check" aria-hidden="true" />
-          <span className="identity-label">Bob's identity key</span>
-          <code className="identity-value">{bobFingerprint || 'generating…'}</code>
-        </div>
-        <span className="identity-caveat">
-          Long-term identity private keys known to both parties in advance — Eve never has a copy of either.
-        </span>
-      </div>
-
       <div className="handshake-bar">
         <div className="handshake-label">
           <i className="ti ti-arrows-exchange" aria-hidden="true" />
@@ -282,15 +314,30 @@ function Level5() {
             '— in progress…'
           }
         </div>
-        <button className="handshake-redo" onClick={runHandshake} disabled={busy}>
+        <button className="handshake-redo" onClick={() => runHandshake(false)} disabled={busy}>
           New exchange
         </button>
       </div>
 
+      <AttackPanel
+        attacks={ATTACKS}
+        selectedAttackId={selectedAttackId}
+        onSelect={setSelectedAttackId}
+        onRun={runMitmAttack}
+        running={attackRunning}
+        disabled={attackRunning || busy}
+        result={attackResult}
+      />
+
       <div className="chat-area">
 
         <div className="chat-col">
-          <h3 className="col-heading">Alice</h3>
+          <div className="col-heading-row">
+            <h3 className="col-heading">Alice</h3>
+            <span className="identity-chip">
+              <i className="ti ti-shield-check" aria-hidden="true" /> {aliceFingerprint || 'generating…'}
+            </span>
+          </div>
           <div className="messages" ref={aliceScrollRef}>
             {aliceMsgs.map(m => (
               <div key={m.id} className={`msg ${m.type}`}>
@@ -325,7 +372,12 @@ function Level5() {
         </div>
 
         <div className="chat-col">
-          <h3 className="col-heading">Bob</h3>
+          <div className="col-heading-row">
+            <h3 className="col-heading">Bob</h3>
+            <span className="identity-chip">
+              <i className="ti ti-shield-check" aria-hidden="true" /> {bobFingerprint || 'generating…'}
+            </span>
+          </div>
           <div className="messages" ref={bobScrollRef}>
             {bobMsgs.map(m => (
               <div key={m.id} className={`msg ${m.type}`}>
