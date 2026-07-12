@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { encryptMessage, decryptMessage } from '../../utils/crypto'
 import { generateDHKeyPair, computeSharedSecret, deriveAesKeyFromSharedSecret, shortHex, PRIME, GENERATOR } from '../../utils/dh'
 import { forgeSubstituteKeys, deriveMitmKeys } from '../../utils/mitm'
+import { tamperCiphertextB64 } from '../../utils/tamper'
 import { useAttackPanel } from '../../hooks/useAttackPanel'
 import AttackPanel from '../../components/AttackPanel'
 import './Level3.css'
@@ -10,6 +11,7 @@ const STEP_DELAY_MS = 550
 
 const ATTACKS = [
   { id: 'mitm', label: 'MITM / Impersonation', available: true },
+  { id: 'tampering', label: 'Tampering', available: true },
 ]
 
 function Level3() {
@@ -20,7 +22,9 @@ function Level3() {
   const [sender, setSender] = useState('alice')
   const [status, setStatus] = useState('exchanging') // 'exchanging' | 'ready'
   const [compromised, setCompromised] = useState(false) // true once Eve has separately keyed sessions with both sides
-  const [pendingIntercepts, setPendingIntercepts] = useState([]) // messages Eve is holding, awaiting forward/edit
+  const [pendingIntercepts, setPendingIntercepts] = useState([]) // messages Eve is holding, awaiting forward/edit (MITM)
+  const [pendingTamperMsgs, setPendingTamperMsgs] = useState([]) // messages Eve is holding, awaiting forward decision (tampering)
+  const [tamperingEnabled, setTamperingEnabled] = useState(false)
 
   const {
     selectedAttackId, setSelectedAttackId, attackRunning, attackResult, setAttackResult, runAttack,
@@ -41,13 +45,6 @@ function Level3() {
   const eveScrollRef = useRef(null)
 
   useEffect(() => {
-    runHandshake(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    return () => { runIdRef.current++ } // invalidate any in-flight run on unmount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  useEffect(() => {
     if (aliceScrollRef.current) aliceScrollRef.current.scrollTop = aliceScrollRef.current.scrollHeight
   }, [aliceMsgs])
 
@@ -57,7 +54,7 @@ function Level3() {
 
   useEffect(() => {
     if (eveScrollRef.current) eveScrollRef.current.scrollTop = eveScrollRef.current.scrollHeight
-  }, [eveMsgs, pendingIntercepts])
+  }, [eveMsgs, pendingIntercepts, pendingTamperMsgs])
 
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms))
@@ -82,8 +79,10 @@ function Level3() {
     setBobMsgs([])
     setEveMsgs([])
     setPendingIntercepts([])
+    setPendingTamperMsgs([])
     setCompromised(false)
     setAttackResult(null)
+    setTamperingEnabled(false)
     keyRef.current = null
     aliceKeyRef.current = null
     bobKeyRef.current = null
@@ -190,8 +189,8 @@ function Level3() {
     addAlice('✓ Shared secret established — believes this is with Bob')
     addBob('✓ Shared secret established — believes this is with Alice')
     addEve(
-      `Derived TWO separate shared secrets — one with Alice (${shortHex(eveSharedWithAlice, 12)}), ` +
-      `one with Bob (${shortHex(eveSharedWithBob, 12)}) — neither matches the other`
+      `Derived TWO separate shared secrets. One with Alice (${shortHex(eveSharedWithAlice, 12)}). ` +
+      `One with Bob (${shortHex(eveSharedWithBob, 12)}). Neither matches the other.`
     )
     await sleep(STEP_DELAY_MS)
     if (stale()) return
@@ -203,9 +202,8 @@ function Level3() {
     eveKeyWithAliceRef.current = eveKeyWithAlice
     eveKeyWithBobRef.current = eveKeyWithBob
     setCompromised(true)
-    setAttackResult({ type: 'success', text: 'MITM succeeded' })
+    setAttackResult({ type: 'success', text: 'Attack succeeded: messages pass through Eve' })
 
-    addEve('Man-in-the-middle complete — every message will pass through here')
     await sleep(400)
     if (stale()) return
 
@@ -214,9 +212,30 @@ function Level3() {
     setStatus('ready')
   }
 
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    runHandshake(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { runIdRef.current++ } // invalidate any in-flight run on unmount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   function runMitmAttack() {
     if (selectedAttackId !== 'mitm') return
     runAttack(() => runHandshake(true))
+  }
+
+  function runTamperingAttack() {
+    if (selectedAttackId !== 'tampering') return
+    runAttack(async () => {
+      await runHandshake(false)
+      setTamperingEnabled(true)
+    })
+  }
+
+  function runSelectedAttack() {
+    if (selectedAttackId === 'mitm') runMitmAttack()
+    else if (selectedAttackId === 'tampering') runTamperingAttack()
   }
 
   async function sendMsg() {
@@ -251,12 +270,23 @@ function Level3() {
       return
     }
 
-    // Baseline (no attack): single shared key, delivered immediately as before.
+    // Baseline (no attack): single shared key.
     const key = keyRef.current
     const { ivHex, ciphertextB64, ciphertextBytes } = await encryptMessage(key, text)
-    const decrypted = await decryptMessage(key, ivHex, ciphertextB64)
 
     const sentMsg = { id, type: 'sent', text }
+    if (isAlice) setAliceMsgs(prev => [...prev, sentMsg])
+    else setBobMsgs(prev => [...prev, sentMsg])
+
+    if (tamperingEnabled) {
+      setPendingTamperMsgs(prev => [...prev, {
+        id: id + 0.05, fromAlice: isAlice, ts, ivHex, ciphertextB64, bytes: ciphertextBytes,
+      }])
+      setInput('')
+      return
+    }
+
+    const decrypted = await decryptMessage(key, ivHex, ciphertextB64)
     const deliveredMsg = { id: id + 0.1, type: 'received', text: decrypted }
     const eveMsg = {
       id: id + 0.2,
@@ -269,10 +299,8 @@ function Level3() {
     }
 
     if (isAlice) {
-      setAliceMsgs(prev => [...prev, sentMsg])
       setBobMsgs(prev => [...prev, deliveredMsg])
     } else {
-      setBobMsgs(prev => [...prev, sentMsg])
       setAliceMsgs(prev => [...prev, deliveredMsg])
     }
 
@@ -315,6 +343,35 @@ function Level3() {
     if (e.key === 'Enter') sendMsg()
   }
 
+  // Applies to the baseline shared-key session (not the MITM-compromised one — that already
+  // lets Eve edit messages directly). DH gives confidentiality here but nothing checks
+  // integrity, so a blind ciphertext flip still decrypts "successfully" to altered content.
+  async function forwardPendingTamper(item, corrupt) {
+    const key = keyRef.current
+    const finalCiphertext = corrupt ? tamperCiphertextB64(item.ciphertextB64) : item.ciphertextB64
+    const delivered = await decryptMessage(key, item.ivHex, finalCiphertext)
+
+    const deliveredMsg = { id: item.id + 0.1, type: 'received', text: delivered, tampered: corrupt }
+    if (item.fromAlice) setBobMsgs(prev => [...prev, deliveredMsg])
+    else setAliceMsgs(prev => [...prev, deliveredMsg])
+
+    setEveMsgs(prev => [...prev, {
+      id: item.id + 0.2,
+      type: 'attacker',
+      sender: item.fromAlice ? 'alice' : 'bob',
+      ts: item.ts,
+      ivHex: item.ivHex,
+      ciphertextB64: item.ciphertextB64,
+      bytes: item.bytes,
+    }])
+
+    setPendingTamperMsgs(prev => prev.filter(p => p.id !== item.id))
+
+    if (corrupt) {
+      setAttackResult({ type: 'success', text: 'Attack succeeded: altered message accepted' })
+    }
+  }
+
   const busy = status === 'exchanging'
 
   return (
@@ -338,7 +395,7 @@ function Level3() {
         attacks={ATTACKS}
         selectedAttackId={selectedAttackId}
         onSelect={setSelectedAttackId}
-        onRun={runMitmAttack}
+        onRun={runSelectedAttack}
         running={attackRunning}
         disabled={attackRunning || busy}
         result={attackResult}
@@ -377,6 +434,26 @@ function Level3() {
               }
               return <div key={m.id} className="msg capture">{m.text}</div>
             })}
+
+            {pendingTamperMsgs.map(item => (
+              <div key={item.id} className="intercept-card">
+                <div className="intercept-meta">
+                  [{item.ts}] FROM: {(item.fromAlice ? 'alice' : 'bob').toUpperCase()} · {item.bytes}B — held, awaiting forward decision
+                </div>
+                <div className="intercept-ciphertext">
+                  <span className="cipher-label">IV</span> {item.ivHex}<br />
+                  <span className="cipher-label">CT</span> {item.ciphertextB64}
+                </div>
+                <div className="intercept-actions">
+                  <button className="forward-btn" onClick={() => forwardPendingTamper(item, false)}>
+                    <i className="ti ti-send" aria-hidden="true" /> Forward unmodified
+                  </button>
+                  <button className="tamper-btn" onClick={() => forwardPendingTamper(item, true)}>
+                    <i className="ti ti-edit" aria-hidden="true" /> Corrupt &amp; forward
+                  </button>
+                </div>
+              </div>
+            ))}
 
             {pendingIntercepts.map(item => (
               <div key={item.id} className="intercept-card">
@@ -433,10 +510,14 @@ function Level3() {
         <p>
           Alice and Bob each generate a private exponent locally and exchange only public values
           (g^a mod p and g^b mod p) over the network. Nothing here proves *who* sent a given public
-          value, though — that's exactly what an attacker can exploit. Run the MITM attack above to
-          see Eve intercept both public values and substitute her own, ending up with two separate
+          value, though — that's exactly what an attacker can exploit. Select MITM above and run it
+          to see Eve intercept both public values and substitute her own, ending up with two separate
           shared secrets — one with Alice, one with Bob — while both of them believe they're talking
-          directly to each other. Level 4 fixes this by having each side sign its public value with
+          directly to each other. Separately, select Tampering: DH gives confidentiality here, but
+          nothing checks integrity. Once enabled, new messages pause at Eve first — try sending one
+          and choosing "Corrupt &amp; forward": a blind ciphertext edit still decrypts without error.
+          Level 4
+          fixes the impersonation problem by having each side sign its public value with
           a long-term identity key Eve doesn't have.
         </p>
       </div>

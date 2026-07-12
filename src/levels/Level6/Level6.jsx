@@ -24,6 +24,7 @@ import {
 } from '../../utils/hmac'
 import { encodeForMacWithSeq, isReplay } from '../../utils/replay'
 import { forgeSubstituteKeys, verifyForgedValues } from '../../utils/mitm'
+import { tamperCiphertextB64 } from '../../utils/tamper'
 import { useAttackPanel } from '../../hooks/useAttackPanel'
 import AttackPanel from '../../components/AttackPanel'
 import './Level6.css'
@@ -32,6 +33,7 @@ const STEP_DELAY_MS = 550
 
 const ATTACKS = [
   { id: 'mitm', label: 'MITM / Impersonation', available: true },
+  { id: 'tampering', label: 'Tampering', available: true },
 ]
 
 function Level6() {
@@ -43,6 +45,8 @@ function Level6() {
   const [status, setStatus] = useState('identities') // 'identities' | 'exchanging' | 'ready' | 'failed'
   const [aliceFingerprint, setAliceFingerprint] = useState('')
   const [bobFingerprint, setBobFingerprint] = useState('')
+  const [tamperingEnabled, setTamperingEnabled] = useState(false)
+  const [pendingTamperMsgs, setPendingTamperMsgs] = useState([]) // messages Eve is holding, awaiting forward decision
 
   const {
     selectedAttackId, setSelectedAttackId, attackRunning, attackResult, setAttackResult, runAttack,
@@ -95,6 +99,8 @@ function Level6() {
     setBobMsgs([])
     setEveMsgs([])
     setAttackResult(null)
+    setTamperingEnabled(false)
+    setPendingTamperMsgs([])
 
     // Fresh session — sequence counters and "last seen" trackers reset along with the keys below.
     aliceSeqRef.current = 0
@@ -179,20 +185,19 @@ function Level6() {
     addAlice(
       aliceVerifiedBob
         ? "✓ Verified B's signature against Bob's known identity key"
-        : "✕ Signature verification FAILED — the value received doesn't match what was signed — rejecting"
+        : "✕ Signature verification FAILED — public value received doesn't match what was signed — rejecting"
     )
     addBob(
       bobVerifiedAlice
         ? "✓ Verified A's signature against Alice's known identity key"
-        : "✕ Signature verification FAILED — the value received doesn't match what was signed — rejecting"
+        : "✕ Signature verification FAILED — public value received doesn't match what was signed — rejecting"
     )
     await sleep(STEP_DELAY_MS)
     if (stale()) return
 
     if (!aliceVerifiedBob || !bobVerifiedAlice) {
       if (underAttack) {
-        addEve('Attack blocked — cannot forge a signature Alice or Bob will accept for a substituted value')
-        setAttackResult({ type: 'blocked', text: 'Attack blocked' })
+        setAttackResult({ type: 'blocked', text: 'Attack blocked: cannot forge valid signature for substituted value' })
       }
       setStatus('failed')
       return
@@ -266,11 +271,24 @@ function Level6() {
 
   useEffect(() => {
     if (eveScrollRef.current) eveScrollRef.current.scrollTop = eveScrollRef.current.scrollHeight
-  }, [eveMsgs])
+  }, [eveMsgs, pendingTamperMsgs])
 
   function runMitmAttack() {
     if (selectedAttackId !== 'mitm') return
     runAttack(() => runHandshake(true))
+  }
+
+  function runTamperingAttack() {
+    if (selectedAttackId !== 'tampering') return
+    runAttack(async () => {
+      await runHandshake(false)
+      setTamperingEnabled(true)
+    })
+  }
+
+  function runSelectedAttack() {
+    if (selectedAttackId === 'mitm') runMitmAttack()
+    else if (selectedAttackId === 'tampering') runTamperingAttack()
   }
 
   /**
@@ -284,10 +302,17 @@ function Level6() {
     const setCounter = fromAlice ? setLastSeenFromAlice : setLastSeenFromBob
 
     const macBytes = encodeForMacWithSeq(seq, ivHex, ciphertextB64)
+    const computedTag = await computeHmacHex(hmacKey, macBytes)
     const integrityOk = await verifyHmacHex(hmacKey, tagHex, macBytes)
     if (!integrityOk) {
       const lastSeenRef = fromAlice ? lastSeenFromAliceRef : lastSeenFromBobRef
-      return { ok: false, reason: '✕ HMAC verification failed — message discarded', counterAfter: lastSeenRef.current }
+      return {
+        ok: false,
+        reason: '✕ HMAC verification failed — message discarded',
+        counterAfter: lastSeenRef.current,
+        sentTag: tagHex,
+        computedTag,
+      }
     }
 
     const lastSeenRef = fromAlice ? lastSeenFromAliceRef : lastSeenFromBobRef
@@ -325,12 +350,33 @@ function Level6() {
     const macBytes = encodeForMacWithSeq(seq, ivHex, ciphertextB64)
     const tagHex = await computeHmacHex(hmacKey, macBytes)
 
+    const sentMsg = { id, type: 'sent', text }
+    if (isAlice) setAliceMsgs(prev => [...prev, sentMsg])
+    else setBobMsgs(prev => [...prev, sentMsg])
+
+    if (tamperingEnabled) {
+      setPendingTamperMsgs(prev => [...prev, {
+        id: id + 0.05, fromAlice: isAlice, ts, seq, ivHex, ciphertextB64, tagHex, bytes: ciphertextBytes,
+      }])
+      setInput('')
+      return
+    }
+
     const delivered = await deliverMessage({ seq, ivHex, ciphertextB64, tagHex, fromAlice: isAlice })
 
-    const sentMsg = { id, type: 'sent', text }
     const deliveredMsg = delivered.ok
       ? { id: id + 0.1, type: 'received', text: delivered.text, verified: true, seq, ok: true, counterAfter: delivered.counterAfter }
-      : { id: id + 0.1, type: 'rejected', text: delivered.reason, verified: false, seq, ok: false, counterAfter: delivered.counterAfter }
+      : {
+          id: id + 0.1,
+          type: 'rejected',
+          text: delivered.reason,
+          verified: false,
+          seq,
+          ok: false,
+          counterAfter: delivered.counterAfter,
+          sentTag: delivered.sentTag,
+          computedTag: delivered.computedTag,
+        }
     const eveMsg = {
       id: id + 0.2,
       type: 'attacker',
@@ -345,10 +391,8 @@ function Level6() {
     }
 
     if (isAlice) {
-      setAliceMsgs(prev => [...prev, sentMsg])
       setBobMsgs(prev => [...prev, deliveredMsg])
     } else {
-      setBobMsgs(prev => [...prev, sentMsg])
       setAliceMsgs(prev => [...prev, deliveredMsg])
     }
 
@@ -370,7 +414,17 @@ function Level6() {
     const id = msgId.current++
     const replayedMsg = result.ok
       ? { id, type: 'received', text: result.text, verified: true, seq: m.seq, ok: true, counterAfter: result.counterAfter }
-      : { id, type: 'rejected', text: result.reason, verified: false, seq: m.seq, ok: false, counterAfter: result.counterAfter }
+      : {
+          id,
+          type: 'rejected',
+          text: result.reason,
+          verified: false,
+          seq: m.seq,
+          ok: false,
+          counterAfter: result.counterAfter,
+          sentTag: result.sentTag,
+          computedTag: result.computedTag,
+        }
 
     if (m.fromAlice) {
       setBobMsgs(prev => [...prev, replayedMsg])
@@ -383,6 +437,60 @@ function Level6() {
       (result.ok ? 'accepted (!)' : 'rejected by sequence check'),
       'capture'
     )
+  }
+
+  // Same integrity guarantee as Level 5: Eve has no HMAC key, so a blind ciphertext edit
+  // invalidates the tag before the sequence check ever runs — deliverMessage catches it at
+  // the very first step, exactly like it would for a first-time tampered message.
+  async function forwardPendingTamper(item, corrupt) {
+    const finalCiphertext = corrupt ? tamperCiphertextB64(item.ciphertextB64) : item.ciphertextB64
+    const result = await deliverMessage({
+      seq: item.seq,
+      ivHex: item.ivHex,
+      ciphertextB64: finalCiphertext,
+      tagHex: item.tagHex,
+      fromAlice: item.fromAlice,
+    })
+
+    const deliveredMsg = result.ok
+      ? { id: item.id + 0.1, type: 'received', text: result.text, verified: true, tampered: corrupt, seq: item.seq, ok: true, counterAfter: result.counterAfter }
+      : {
+          id: item.id + 0.1,
+          type: 'rejected',
+          text: result.reason,
+          verified: false,
+          seq: item.seq,
+          ok: false,
+          counterAfter: result.counterAfter,
+          sentTag: result.sentTag,
+          computedTag: result.computedTag,
+        }
+
+    if (item.fromAlice) setBobMsgs(prev => [...prev, deliveredMsg])
+    else setAliceMsgs(prev => [...prev, deliveredMsg])
+
+    setEveMsgs(prev => [...prev, {
+      id: item.id + 0.2,
+      type: 'attacker',
+      sender: item.fromAlice ? 'alice' : 'bob',
+      ts: item.ts,
+      seq: item.seq,
+      ivHex: item.ivHex,
+      ciphertextB64: item.ciphertextB64,
+      tagHex: item.tagHex,
+      bytes: item.bytes,
+      fromAlice: item.fromAlice,
+    }])
+
+    setPendingTamperMsgs(prev => prev.filter(p => p.id !== item.id))
+
+    if (corrupt) {
+      setAttackResult(
+        integrityOk
+          ? { type: 'success', text: 'Attack succeeded: altered message accepted' }
+          : { type: 'blocked', text: 'Attack blocked: HMAC verification failed' }
+      )
+    }
   }
 
   function handleKey(e) {
@@ -412,7 +520,7 @@ function Level6() {
         attacks={ATTACKS}
         selectedAttackId={selectedAttackId}
         onSelect={setSelectedAttackId}
-        onRun={runMitmAttack}
+        onRun={runSelectedAttack}
         running={attackRunning}
         disabled={attackRunning || busy}
         result={attackResult}
@@ -433,6 +541,13 @@ function Level6() {
               <div key={m.id} className={`msg ${m.type}`}>
                 {m.text}
                 {m.type === 'received' && <span className="mac-badge">✓ verified &amp; fresh</span>}
+                {m.type === 'received' && m.tampered && <span className="tampered-badge">⚠ altered by Eve — accepted anyway</span>}
+                {m.type === 'rejected' && m.sentTag && (
+                  <div className="tag-mismatch">
+                    <span className="cipher-label">SENT TAG</span> {macShortHex(m.sentTag, 24)}<br />
+                    <span className="cipher-label">COMPUTED</span> {macShortHex(m.computedTag, 24)}
+                  </div>
+                )}
                 {typeof m.seq === 'number' && (
                   <span className={`seq-badge ${m.ok ? 'match' : 'mismatch'}`}>
                     seqNum {m.seq} {m.ok ? '=' : '✕'} counter {m.counterAfter}
@@ -466,6 +581,27 @@ function Level6() {
               }
               return <div key={m.id} className="msg capture">{m.text}</div>
             })}
+
+            {pendingTamperMsgs.map(item => (
+              <div key={item.id} className="intercept-card">
+                <div className="intercept-meta">
+                  [{item.ts}] FROM: {(item.fromAlice ? 'alice' : 'bob').toUpperCase()} · SEQNUM{item.seq} · {item.bytes}B — held, awaiting forward decision
+                </div>
+                <div className="intercept-ciphertext">
+                  <span className="cipher-label">IV</span> {item.ivHex}<br />
+                  <span className="cipher-label">CT</span> {item.ciphertextB64}<br />
+                  <span className="cipher-label">TAG</span> {macShortHex(item.tagHex, 24)}
+                </div>
+                <div className="intercept-actions">
+                  <button className="forward-btn" onClick={() => forwardPendingTamper(item, false)}>
+                    <i className="ti ti-send" aria-hidden="true" /> Forward unmodified
+                  </button>
+                  <button className="tamper-btn" onClick={() => forwardPendingTamper(item, true)}>
+                    <i className="ti ti-edit" aria-hidden="true" /> Corrupt &amp; forward
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -482,6 +618,13 @@ function Level6() {
               <div key={m.id} className={`msg ${m.type}`}>
                 {m.text}
                 {m.type === 'received' && <span className="mac-badge">✓ verified &amp; fresh</span>}
+                {m.type === 'received' && m.tampered && <span className="tampered-badge">⚠ altered by Eve — accepted anyway</span>}
+                {m.type === 'rejected' && m.sentTag && (
+                  <div className="tag-mismatch">
+                    <span className="cipher-label">SENT TAG</span> {macShortHex(m.sentTag, 24)}<br />
+                    <span className="cipher-label">COMPUTED</span> {macShortHex(m.computedTag, 24)}
+                  </div>
+                )}
                 {typeof m.seq === 'number' && (
                   <span className={`seq-badge ${m.ok ? 'match' : 'mismatch'}`}>
                     seqNum {m.seq} {m.ok ? '=' : '✕'} counter {m.counterAfter}
@@ -516,7 +659,16 @@ function Level6() {
           Every layer from Levels 2–5 is active here: Diffie-Hellman gives Alice and Bob a shared
           secret Eve can't derive; ECDSA signatures on the DH values stop her from impersonating
           either side; AES-256-CTR hides message content; HMAC-SHA256 (keyed independently of the
-          AES key) catches any altered ciphertext that CTR mode alone would silently accept.
+          AES key) catches any altered ciphertext that CTR mode alone would silently accept — select
+          Tampering above and run it, then send a message: it pauses at Eve first, and choosing
+          "Corrupt &amp; forward" shows the mismatched tag that gets it rejected immediately. The one
+          gap all of that still leaves open is a captured message being resent unmodified, which is
+          exactly what sequence numbers close: try "Replay this message" to see a perfectly valid,
+          untampered message get rejected anyway, because its sequence number was already seen.
+        </p>
+        <p>
+          Defence in depth isn't one control doing everything — it's each layer covering the
+          specific gap the one before it left open.
         </p>
       </div>
     </div>

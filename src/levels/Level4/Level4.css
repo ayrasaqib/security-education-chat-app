@@ -308,3 +308,86 @@
   color: #555;
   line-height: 1.5;
 }
+.tamper-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+  letter-spacing: .01em;
+  border-radius: 6px;
+  border: 1px solid #fca5a5;
+  background: #fff;
+  color: #b91c1c;
+  cursor: pointer;
+}
+
+.tamper-btn:hover {
+  background: #fee2e2;
+}
+
+.tampered-badge {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #b45309;
+}
+
+.intercept-card {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-left: 3px solid #f59e0b;
+  border-radius: 4px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.intercept-meta {
+  font-family: monospace;
+  font-size: 10px;
+  color: #92400e;
+  font-weight: 600;
+}
+
+.intercept-ciphertext {
+  font-family: monospace;
+  font-size: 11px;
+  color: #7f1d1d;
+  word-break: break-all;
+}
+
+.intercept-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.intercept-actions button {
+  flex: 1;
+  justify-content: center;
+}
+
+.forward-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+  letter-spacing: .01em;
+  border-radius: 6px;
+  border: 1px solid #86efac;
+  background: #fff;
+  color: #15803d;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.forward-btn:hover {
+  background: #dcfce7;
+}
