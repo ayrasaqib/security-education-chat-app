@@ -34,6 +34,7 @@ const STEP_DELAY_MS = 550
 const ATTACKS = [
   { id: 'mitm', label: 'MITM / Impersonation', available: true },
   { id: 'tampering', label: 'Tampering', available: true },
+  { id: 'replay', label: 'Replay', available: true },
 ]
 
 function Level5() {
@@ -46,6 +47,7 @@ function Level5() {
   const [aliceFingerprint, setAliceFingerprint] = useState('')
   const [bobFingerprint, setBobFingerprint] = useState('')
   const [tamperingEnabled, setTamperingEnabled] = useState(false)
+  const [replayEnabled, setReplayEnabled] = useState(false)
   const [pendingTamperMsgs, setPendingTamperMsgs] = useState([]) // messages Eve is holding, awaiting forward decision
 
   const {
@@ -99,6 +101,7 @@ function Level5() {
     setEveMsgs([])
     setAttackResult(null)
     setTamperingEnabled(false)
+    setReplayEnabled(false)
     setPendingTamperMsgs([])
 
     const aliceIdentity = aliceIdentityRef.current
@@ -260,9 +263,49 @@ function Level5() {
     })
   }
 
+  function runReplayAttack() {
+    if (selectedAttackId !== 'replay') return
+    runAttack(async () => {
+      await runHandshake(false)
+      setReplayEnabled(true)
+    })
+  }
+
   function runSelectedAttack() {
     if (selectedAttackId === 'mitm') runMitmAttack()
     else if (selectedAttackId === 'tampering') runTamperingAttack()
+    else if (selectedAttackId === 'replay') runReplayAttack()
+  }
+
+  // This is the gap Level 6 closes: HMAC proves the bytes weren't altered, but says nothing
+  // about whether they've been seen before. Replaying a captured message untouched reproduces
+  // the exact same tag, so it verifies and decrypts exactly like the first time. The outcome is
+  // logged in Eve's panel — there's no badge on Bob's bubble either way, since a valid HMAC on a
+  // replay looks identical to a valid HMAC on an original message from where he's sitting.
+  async function replayCaptured(m) {
+    const hmacKey = hmacKeyRef.current
+    const aesKey = aesKeyRef.current
+    const macBytes = encodeForMac(m.ivHex, m.ciphertextB64)
+    const integrityOk = await verifyHmacHex(hmacKey, m.tagHex, macBytes)
+
+    const id = msgId.current++
+    if (!integrityOk) {
+      const rejectedMsg = { id, type: 'rejected', text: '✕ HMAC verification failed due to tag mismatch — message discarded', verified: false }
+      if (m.sender === 'alice') setBobMsgs(prev => [...prev, rejectedMsg])
+      else setAliceMsgs(prev => [...prev, rejectedMsg])
+      addEve(`↻ Replayed FROM: ${m.sender.toUpperCase()} — rejected, HMAC verification failed`)
+      setAttackResult({ type: 'blocked', text: 'Attack blocked: HMAC verification failed' })
+      return
+    }
+
+    const text = await decryptMessage(aesKey, m.ivHex, m.ciphertextB64)
+    const replayedMsg = { id, type: 'received', text, verified: true }
+    if (m.sender === 'alice') setBobMsgs(prev => [...prev, replayedMsg])
+    else setAliceMsgs(prev => [...prev, replayedMsg])
+
+    addEve(`↻ Replayed FROM: ${m.sender.toUpperCase()} — accepted, HMAC has nothing to say about freshness`)
+
+    setAttackResult({ type: 'success', text: 'Attack succeeded: replayed message accepted despite valid HMAC' })
   }
 
   // This is the level's whole point: Eve still can't read the message, but now she can't
@@ -279,11 +322,11 @@ function Level5() {
     const integrityOk = await verifyHmacHex(hmacKey, item.tagHex, macBytes)
 
     const deliveredMsg = integrityOk
-      ? { id: item.id + 0.1, type: 'received', text: await decryptMessage(aesKey, item.ivHex, finalCiphertext), verified: true, tampered: corrupt }
+      ? { id: item.id + 0.1, type: 'received', text: await decryptMessage(aesKey, item.ivHex, finalCiphertext), verified: true }
       : {
           id: item.id + 0.1,
           type: 'rejected',
-          text: '✕ HMAC verification failed — message discarded',
+          text: '✕ HMAC verification failed due to tag mismatch — message discarded',
           verified: false,
           sentTag: item.tagHex,
           computedTag,
@@ -298,9 +341,11 @@ function Level5() {
       sender: item.fromAlice ? 'alice' : 'bob',
       ts: item.ts,
       ivHex: item.ivHex,
-      ciphertextB64: item.ciphertextB64,
+      ciphertextB64: finalCiphertext,
+      originalCiphertextB64: item.ciphertextB64,
       tagHex: item.tagHex,
       bytes: item.bytes,
+      note: corrupt ? 'CORRUPTED before relay' : 'unmodified',
     }])
 
     setPendingTamperMsgs(prev => prev.filter(p => p.id !== item.id))
@@ -351,7 +396,7 @@ function Level5() {
 
     const deliveredMsg = integrityOk
       ? { id: id + 0.1, type: 'received', text: decrypted, verified: true }
-      : { id: id + 0.1, type: 'rejected', text: '✕ HMAC verification failed — message discarded', verified: false }
+      : { id: id + 0.1, type: 'rejected', text: '✕ HMAC verification failed due to tag mismatch — message discarded', verified: false }
     const eveMsg = {
       id: id + 0.2,
       type: 'attacker',
@@ -420,7 +465,6 @@ function Level5() {
               <div key={m.id} className={`msg ${m.type}`}>
                 {m.text}
                 {m.type === 'received' && <span className="mac-badge">✓ HMAC verified</span>}
-                {m.type === 'received' && m.tampered && <span className="tampered-badge">⚠ altered by Eve — accepted anyway</span>}
                 {m.type === 'rejected' && m.sentTag && (
                   <div className="tag-mismatch">
                     <span className="cipher-label">SENT TAG</span> {macShortHex(m.sentTag, 24)}<br />
@@ -440,13 +484,29 @@ function Level5() {
           <div className="messages" ref={eveScrollRef}>
             {eveMsgs.map(m => {
               if (m.type === 'attacker') {
+                // Blind tampering flips a bit in place — it never re-encrypts, so the IV never changes
+                // and ciphertext equality reliably means "unmodified".
+                const showCtDiff = m.note !== undefined && m.note !== 'unmodified'
                 return (
                   <div key={m.id} className="msg attacker">
-                    [{m.ts}] FROM: {m.sender.toUpperCase()} · {m.bytes}B<br />
+                    [{m.ts}] FROM: {m.sender.toUpperCase()} · {m.bytes}B{m.note ? ` · ${m.note}` : ''}<br />
                     <span className="cipher-label">IV</span> {m.ivHex}<br />
-                    <span className="cipher-label">CT</span> {m.ciphertextB64}<br />
+                    {showCtDiff ? (
+                      <>
+                        <span className="text-diff-label">CT (captured)</span> {m.originalCiphertextB64}<br />
+                        <span className="text-diff-label">CT (sent)</span> {m.ciphertextB64}<br />
+                      </>
+                    ) : (
+                      <>
+                        <span className="cipher-label">CT</span> {m.ciphertextB64}<br />
+                      </>
+                    )}
                     <span className="cipher-label">TAG</span> {macShortHex(m.tagHex, 24)}
-                    <div className="cannot-read">✕ cannot read plaintext, cannot forge a valid tag</div>
+                    {replayEnabled && (
+                      <button className="replay-btn" onClick={() => replayCaptured(m)}>
+                        <i className="ti ti-repeat" aria-hidden="true" /> Replay this message
+                      </button>
+                    )}
                   </div>
                 )
               }
@@ -488,7 +548,6 @@ function Level5() {
               <div key={m.id} className={`msg ${m.type}`}>
                 {m.text}
                 {m.type === 'received' && <span className="mac-badge">✓ HMAC verified</span>}
-                {m.type === 'received' && m.tampered && <span className="tampered-badge">⚠ altered by Eve — accepted anyway</span>}
                 {m.type === 'rejected' && m.sentTag && (
                   <div className="tag-mismatch">
                     <span className="cipher-label">SENT TAG</span> {macShortHex(m.sentTag, 24)}<br />
@@ -531,7 +590,11 @@ function Level5() {
           Tampering above and run it, then send a message: it pauses at Eve first, and choosing
           "Corrupt &amp; forward" shows exactly why it's rejected — the tag Bob computes over what
           actually arrived doesn't match the tag that came with the message, unlike Levels 2-4
-          where Eve's edit reaches decryption unnoticed.
+          where Eve's edit reaches decryption unnoticed. HMAC has nothing to say about freshness,
+          though — select Replay instead and every captured message gets a "Replay this message"
+          button. Resending the exact same IV, ciphertext, and tag reproduces a tag that verifies
+          perfectly, so it's accepted all over again. Level 6 closes exactly this gap with sequence
+          numbers.
         </p>
       </div>
     </div>

@@ -96,6 +96,25 @@
   border-radius: 6px;
 }
 
+.msg.capture {
+  background: #fef2f2;
+  color: #991b1b;
+  font-family: monospace;
+  font-size: 11px;
+  border-left: 3px solid #f87171;
+  border-radius: 4px;
+  padding: 6px 8px;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.level1 .text-diff-label {
+  display: inline-block;
+  font-weight: 700;
+  color: #991b1b;
+  margin-right: 4px;
+}
+
 .sniff-indicator {
   display: flex;
   align-items: center;
@@ -193,12 +212,31 @@
   color: #555;
   line-height: 1.5;
 }
-.tampered-badge {
-  display: block;
-  margin-top: 3px;
+
+.replay-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 4px 8px;
   font-size: 10px;
-  font-weight: 700;
-  color: #b45309;
+  font-weight: 600;
+  font-family: inherit;
+  letter-spacing: .01em;
+  border-radius: 6px;
+  border: 1px solid #fca5a5;
+  background: #fff;
+  color: #b91c1c;
+  cursor: pointer;
+}
+
+.replay-btn:hover:not(:disabled) {
+  background: #fee2e2;
+}
+
+.replay-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .intercept-card {

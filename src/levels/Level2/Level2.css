@@ -182,13 +182,11 @@
   color: #991b1b;
 }
 
-.cannot-read {
-  margin-top: 4px;
-  font-family: inherit;
-  font-size: 10px;
-  font-weight: 600;
-  color: #7f1d1d;
-  letter-spacing: .02em;
+.level2 .text-diff-label {
+  display: inline-block;
+  font-weight: 700;
+  color: #991b1b;
+  margin-right: 4px;
 }
 
 .sniff-indicator {
@@ -275,15 +273,7 @@
   color: #555;
   line-height: 1.5;
 }
-.tampered-badge {
-  display: block;
-  margin-top: 3px;
-  font-size: 10px;
-  font-weight: 700;
-  color: #b45309;
-}
-
-.decrypt-btn {
+.replay-btn {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -294,30 +284,32 @@
   font-family: inherit;
   letter-spacing: .01em;
   border-radius: 6px;
-  border: 1px solid #93c5fd;
+  border: 1px solid #fca5a5;
   background: #fff;
-  color: #1d4ed8;
+  color: #b91c1c;
   cursor: pointer;
 }
 
-.decrypt-btn:hover {
-  background: #eff6ff;
+.replay-btn:hover:not(:disabled) {
+  background: #fee2e2;
 }
 
-.decrypted-plaintext {
+.replay-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.level2 .decrypted-plaintext {
   margin-top: 4px;
   font-family: inherit;
   font-size: 12px;
-  color: #111;
-  background: #eff6ff;
-  border: 1px solid #93c5fd;
-  border-radius: 4px;
-  padding: 5px 6px;
+  color: #b91c1c;
+  background: #fef2f2;
 }
 
-.decrypted-label {
+.level2 .decrypted-label {
   font-weight: 700;
-  color: #1d4ed8;
+  color: #991b1b;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: .02em;

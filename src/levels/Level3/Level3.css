@@ -228,6 +228,29 @@
   color: #991b1b;
 }
 
+.level3 .text-diff-label {
+  display: inline-block;
+  font-weight: 700;
+  color: #991b1b;
+  margin-right: 4px;
+}
+
+.level3 .decrypted-plaintext {
+  margin-top: 4px;
+  font-family: inherit;
+  font-size: 12px;
+  color: #b91c1c;
+  background: #fef2f2;
+}
+
+.level3 .decrypted-label {
+  font-weight: 700;
+  color: #991b1b;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+}
+
 /* ── MITM: Eve's editable intercepted-message card ── */
 .intercept-card {
   background: #fffbeb;
@@ -281,21 +304,30 @@
   background: #fef3c7;
 }
 
-.tampered-badge {
-  display: block;
-  margin-top: 3px;
-  font-size: 10px;
-  font-weight: 700;
-  color: #b45309;
-}
-
-.cannot-read {
-  margin-top: 4px;
-  font-family: inherit;
+.replay-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 4px 8px;
   font-size: 10px;
   font-weight: 600;
-  color: #7f1d1d;
-  letter-spacing: .02em;
+  font-family: inherit;
+  letter-spacing: .01em;
+  border-radius: 6px;
+  border: 1px solid #fca5a5;
+  background: #fff;
+  color: #b91c1c;
+  cursor: pointer;
+}
+
+.replay-btn:hover:not(:disabled) {
+  background: #fee2e2;
+}
+
+.replay-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .sniff-indicator {
@@ -386,7 +418,6 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-top: 6px;
   padding: 4px 8px;
   font-size: 10px;
   font-weight: 600;

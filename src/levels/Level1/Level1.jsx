@@ -5,6 +5,7 @@ import './Level1.css'
 
 const ATTACKS = [
   { id: 'tampering', label: 'Tampering', available: true },
+  { id: 'replay', label: 'Replay', available: true },
 ]
 
 function Level1() {
@@ -15,6 +16,7 @@ function Level1() {
   const [input, setInput] = useState('')
   const [sender, setSender] = useState('alice')
   const [tamperingEnabled, setTamperingEnabled] = useState(false)
+  const [replayEnabled, setReplayEnabled] = useState(false)
   const msgId = useRef(1)
   const aliceScrollRef = useRef(null)
   const bobScrollRef = useRef(null)
@@ -73,10 +75,12 @@ function Level1() {
   }
 
   // Nothing protects this channel at all — Eve can see the plaintext directly, so she can just
-  // retype it before releasing it. There's no check on the other end to catch the difference.
+  // retype it before releasing it. There's no check on the other end to catch the difference, so
+  // the outcome is recorded in Eve's own panel rather than as a warning on Bob's bubble — Bob's
+  // real UI has no way to know anything changed.
   function forwardPending(item) {
     const wasEdited = item.editedText !== item.originalText
-    const deliveredMsg = { id: item.id + 0.1, type: 'received', text: item.editedText, tampered: wasEdited }
+    const deliveredMsg = { id: item.id + 0.1, type: 'received', text: item.editedText }
 
     if (item.fromAlice) setBobMsgs(prev => [...prev, deliveredMsg])
     else setAliceMsgs(prev => [...prev, deliveredMsg])
@@ -84,9 +88,11 @@ function Level1() {
     setEveMsgs(prev => [...prev, {
       id: item.id + 0.2,
       type: 'attacker',
-      text: item.originalText,
+      text: item.editedText,
+      originalText: item.originalText,
       sender: item.fromAlice ? 'alice' : 'bob',
       ts: item.ts,
+      note: wasEdited ? 'EDITED before relay' : 'unmodified',
     }])
 
     setPendingMsgs(prev => prev.filter(p => p.id !== item.id))
@@ -109,6 +115,44 @@ function Level1() {
     })
   }
 
+  // Same reset-then-arm pattern as tampering, but messages deliver instantly again —
+  // replay isn't about editing a message in flight, it's about resending one that already
+  // went through, so every captured message just gets a "Replay" action instead of a pause.
+  function runReplayAttack() {
+    if (selectedAttackId !== 'replay') return
+    runAttack(async () => {
+      setAliceMsgs([])
+      setBobMsgs([])
+      setEveMsgs([])
+      setPendingMsgs([])
+      setReplayEnabled(true)
+    })
+  }
+
+  function runSelectedAttack() {
+    if (selectedAttackId === 'tampering') runTamperingAttack()
+    else if (selectedAttackId === 'replay') runReplayAttack()
+  }
+
+  // There's no session state anywhere on this channel — no counter, no key, nothing that
+  // distinguishes a message arriving for the first time from the exact same bytes arriving
+  // again. Eve just re-delivers what she already captured and it's accepted, identically —
+  // logged in her own panel, since Bob's UI has no way to flag it as a repeat.
+  function replayCaptured(m) {
+    const id = msgId.current++
+    const replayedMsg = { id, type: 'received', text: m.text }
+    if (m.sender === 'alice') setBobMsgs(prev => [...prev, replayedMsg])
+    else setAliceMsgs(prev => [...prev, replayedMsg])
+
+    setEveMsgs(prev => [...prev, {
+      id: msgId.current++,
+      type: 'capture',
+      text: `↻ Replayed FROM: ${m.sender.toUpperCase()} — accepted, nothing here tracks what's already been delivered`,
+    }])
+
+    setAttackResult({ type: 'success', text: 'Attack succeeded: replayed message accepted' })
+  }
+
   return (
     <div className="level1">
 
@@ -116,9 +160,9 @@ function Level1() {
         attacks={ATTACKS}
         selectedAttackId={selectedAttackId}
         onSelect={setSelectedAttackId}
-        onRun={runTamperingAttack}
+        onRun={runSelectedAttack}
         running={attackRunning}
-        disabled={attackRunning || tamperingEnabled}
+        disabled={attackRunning || tamperingEnabled || replayEnabled}
         result={attackResult}
       />
 
@@ -134,7 +178,6 @@ function Level1() {
             {aliceMsgs.map(m => (
               <div key={m.id} className={`msg ${m.type}`}>
                 {m.text}
-                {m.type === 'received' && m.tampered && <span className="tampered-badge">⚠ altered by Eve — accepted anyway</span>}
               </div>
             ))}
           </div>
@@ -149,11 +192,28 @@ function Level1() {
             {eveMsgs.length === 0 && pendingMsgs.length === 0 && (
               <div className="empty-eve">Waiting for traffic…</div>
             )}
-            {eveMsgs.map(m => (
-              <div key={m.id} className="msg attacker">
-                [{m.ts}] FROM: {m.sender.toUpperCase()}<br />{m.text}
-              </div>
-            ))}
+            {eveMsgs.map(m => {
+              if (m.type === 'attacker') {
+                const wasEdited = m.originalText !== undefined && m.originalText !== m.text
+                return (
+                  <div key={m.id} className="msg attacker">
+                    [{m.ts}] FROM: {m.sender.toUpperCase()}{m.note ? ` · ${m.note}` : ''}<br />
+                    {wasEdited ? (
+                      <>
+                        <span className="text-diff-label">BEFORE</span> {m.originalText}<br />
+                        <span className="text-diff-label">AFTER</span> {m.text}
+                      </>
+                    ) : m.text}
+                    {replayEnabled && (
+                      <button className="replay-btn" onClick={() => replayCaptured(m)}>
+                        <i className="ti ti-repeat" aria-hidden="true" /> Replay this message
+                      </button>
+                    )}
+                  </div>
+                )
+              }
+              return <div key={m.id} className="msg capture">{m.text}</div>
+            })}
 
             {pendingMsgs.map(item => (
               <div key={item.id} className="intercept-card">
@@ -184,7 +244,6 @@ function Level1() {
             {bobMsgs.map(m => (
               <div key={m.id} className={`msg ${m.type}`}>
                 {m.text}
-                {m.type === 'received' && m.tampered && <span className="tampered-badge">⚠ altered by Eve — accepted anyway</span>}
               </div>
             ))}
           </div>
@@ -215,7 +274,10 @@ function Level1() {
           nothing checks the message's integrity either, she can hold a message, edit the text she can
           already see in plain sight, and release whichever version she wants. Run the tampering attack
           above, then send a message: it pauses at Eve first, and whatever she forwards is delivered
-          without any error, because there's no mechanism here to notice it changed at all.
+          without any error, because there's no mechanism here to notice it changed at all. Select
+          Replay instead and every message she captures gets a "Replay this message" button — nothing
+          on this channel tracks what's already been delivered, so resending the exact same message
+          is accepted again without complaint.
         </p>
       </div>
     </div>

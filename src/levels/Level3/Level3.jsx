@@ -12,6 +12,7 @@ const STEP_DELAY_MS = 550
 const ATTACKS = [
   { id: 'mitm', label: 'MITM / Impersonation', available: true },
   { id: 'tampering', label: 'Tampering', available: true },
+  { id: 'replay', label: 'Replay', available: true },
 ]
 
 function Level3() {
@@ -25,6 +26,7 @@ function Level3() {
   const [pendingIntercepts, setPendingIntercepts] = useState([]) // messages Eve is holding, awaiting forward/edit (MITM)
   const [pendingTamperMsgs, setPendingTamperMsgs] = useState([]) // messages Eve is holding, awaiting forward decision (tampering)
   const [tamperingEnabled, setTamperingEnabled] = useState(false)
+  const [replayEnabled, setReplayEnabled] = useState(false)
 
   const {
     selectedAttackId, setSelectedAttackId, attackRunning, attackResult, setAttackResult, runAttack,
@@ -83,6 +85,7 @@ function Level3() {
     setCompromised(false)
     setAttackResult(null)
     setTamperingEnabled(false)
+    setReplayEnabled(false)
     keyRef.current = null
     aliceKeyRef.current = null
     bobKeyRef.current = null
@@ -233,9 +236,37 @@ function Level3() {
     })
   }
 
+  // Runs the baseline (non-MITM) handshake, same as tampering — the Eve-in-the-middle keys
+  // from a MITM run aren't what replay is demonstrating here.
+  function runReplayAttack() {
+    if (selectedAttackId !== 'replay') return
+    runAttack(async () => {
+      await runHandshake(false)
+      setReplayEnabled(true)
+    })
+  }
+
   function runSelectedAttack() {
     if (selectedAttackId === 'mitm') runMitmAttack()
     else if (selectedAttackId === 'tampering') runTamperingAttack()
+    else if (selectedAttackId === 'replay') runReplayAttack()
+  }
+
+  // DH gives confidentiality but nothing here checks freshness — decrypting the same captured
+  // IV/ciphertext a second time with the same shared key just produces the same plaintext again.
+  // The outcome is logged in Eve's panel, not on the message itself — Bob's client has no way
+  // to know it's a repeat.
+  async function replayCaptured(m) {
+    const key = keyRef.current
+    const text = await decryptMessage(key, m.ivHex, m.ciphertextB64)
+    const id = msgId.current++
+    const replayedMsg = { id, type: 'received', text }
+    if (m.sender === 'alice') setBobMsgs(prev => [...prev, replayedMsg])
+    else setAliceMsgs(prev => [...prev, replayedMsg])
+
+    addEve(`↻ Replayed FROM: ${m.sender.toUpperCase()} — accepted, nothing here tracks what's already been delivered`)
+
+    setAttackResult({ type: 'success', text: 'Attack succeeded: replayed message accepted' })
   }
 
   async function sendMsg() {
@@ -265,6 +296,8 @@ function Level3() {
         originalText: plaintext,
         editedText: plaintext,
         bytes: ciphertextBytes,
+        ivHex,
+        ciphertextB64,
       }])
       setInput('')
       return
@@ -312,30 +345,38 @@ function Level3() {
     setPendingIntercepts(prev => prev.map(p => (p.id === id ? { ...p, editedText: newText } : p)))
   }
 
+  // Eve holds both sides' keys, so she isn't blindly flipping bits — she can retype the message
+  // itself before re-encrypting for the recipient. The outcome (and both ciphertexts, since a
+  // fresh encryption always produces a new one) goes in Eve's panel, not as a badge on Bob's or
+  // Alice's bubble — neither of them has any way to see this happened.
   async function forwardIntercept(item) {
     const outgoingKey = item.fromAlice ? eveKeyWithBobRef.current : eveKeyWithAliceRef.current
     const recipientKey = item.fromAlice ? bobKeyRef.current : aliceKeyRef.current
 
-    // Eve re-encrypts (possibly edited) plaintext with the key she shares with the recipient.
     const { ivHex, ciphertextB64 } = await encryptMessage(outgoingKey, item.editedText)
     const delivered = await decryptMessage(recipientKey, ivHex, ciphertextB64)
 
     const wasEdited = item.editedText !== item.originalText
-    const deliveredMsg = {
-      id: item.id + 0.1,
-      type: 'received',
-      text: delivered,
-      tampered: wasEdited,
-    }
+    const deliveredMsg = { id: item.id + 0.1, type: 'received', text: delivered }
 
     if (item.fromAlice) setBobMsgs(prev => [...prev, deliveredMsg])
     else setAliceMsgs(prev => [...prev, deliveredMsg])
 
-    addEve(
-      `Forwarded ${item.fromAlice ? 'Alice → Bob' : 'Bob → Alice'}` +
-      (wasEdited ? ' — EDITED before relay' : ' — unmodified'),
-      'capture'
-    )
+    setEveMsgs(prev => [...prev, {
+      id: item.id + 0.2,
+      type: 'attacker',
+      sender: item.fromAlice ? 'alice' : 'bob',
+      ts: item.ts,
+      bytes: item.bytes,
+      ivHex,
+      ciphertextB64,
+      originalIvHex: item.ivHex,
+      originalCiphertextB64: item.ciphertextB64,
+      originalText: item.originalText,
+      decrypted: item.editedText,
+      note: wasEdited ? 'EDITED before relay' : 'unmodified',
+    }])
+
     setPendingIntercepts(prev => prev.filter(p => p.id !== item.id))
   }
 
@@ -351,7 +392,7 @@ function Level3() {
     const finalCiphertext = corrupt ? tamperCiphertextB64(item.ciphertextB64) : item.ciphertextB64
     const delivered = await decryptMessage(key, item.ivHex, finalCiphertext)
 
-    const deliveredMsg = { id: item.id + 0.1, type: 'received', text: delivered, tampered: corrupt }
+    const deliveredMsg = { id: item.id + 0.1, type: 'received', text: delivered }
     if (item.fromAlice) setBobMsgs(prev => [...prev, deliveredMsg])
     else setAliceMsgs(prev => [...prev, deliveredMsg])
 
@@ -361,8 +402,11 @@ function Level3() {
       sender: item.fromAlice ? 'alice' : 'bob',
       ts: item.ts,
       ivHex: item.ivHex,
-      ciphertextB64: item.ciphertextB64,
+      ciphertextB64: finalCiphertext,
+      originalIvHex: item.ivHex, // blind tampering only flips ciphertext bytes — the IV itself never changes
+      originalCiphertextB64: item.ciphertextB64,
       bytes: item.bytes,
+      note: corrupt ? 'CORRUPTED before relay' : 'unmodified',
     }])
 
     setPendingTamperMsgs(prev => prev.filter(p => p.id !== item.id))
@@ -409,7 +453,6 @@ function Level3() {
             {aliceMsgs.map(m => (
               <div key={m.id} className={`msg ${m.type}`}>
                 {m.text}
-                {m.type === 'received' && m.tampered && <span className="tampered-badge">⚠ altered in transit</span>}
               </div>
             ))}
           </div>
@@ -423,12 +466,55 @@ function Level3() {
           <div className="messages" ref={eveScrollRef}>
             {eveMsgs.map(m => {
               if (m.type === 'attacker') {
+                // Blind tampering never touches the IV or re-encrypts, so ciphertext equality is a
+                // reliable "was this changed" signal there — but MITM forwards always re-encrypt with
+                // a fresh IV (AES-CTR requires it), so raw ciphertext bytes differ even when the
+                // plaintext wasn't edited. The plaintext-derived `note` covers both cases correctly.
+                const showCtDiff = m.note !== undefined && m.note !== 'unmodified'
+                // Blind tampering reuses the same IV in both rows (it never re-encrypts) — repeating
+                // it as "captured" vs "sent" would wrongly imply it changed too. MITM forwards do
+                // re-encrypt with a fresh IV, so there it's a genuine, worth-showing difference.
+                const ivChanged = m.originalIvHex !== undefined && m.originalIvHex !== m.ivHex
+                const showTextDiff = m.originalText !== undefined && m.originalText !== m.decrypted
                 return (
                   <div key={m.id} className="msg attacker">
-                    [{m.ts}] FROM: {m.sender.toUpperCase()} · {m.bytes}B<br />
-                    <span className="cipher-label">IV</span> {m.ivHex}<br />
-                    <span className="cipher-label">CT</span> {m.ciphertextB64}
-                    <div className="cannot-read">✕ cannot read plaintext</div>
+                    [{m.ts}] FROM: {m.sender.toUpperCase()} · {m.bytes}B{m.note ? ` · ${m.note}` : ''}<br />
+                    {showCtDiff ? (
+                      ivChanged ? (
+                        <>
+                          <span className="text-diff-label">IV/CT (captured)</span> {m.originalIvHex} / {m.originalCiphertextB64}<br />
+                          <span className="text-diff-label">IV/CT (sent)</span> {m.ivHex} / {m.ciphertextB64}
+                        </>
+                      ) : (
+                        <>
+                          <span className="cipher-label">IV</span> {m.ivHex}<br />
+                          <span className="text-diff-label">CT (captured)</span> {m.originalCiphertextB64}<br />
+                          <span className="text-diff-label">CT (sent)</span> {m.ciphertextB64}
+                        </>
+                      )
+                    ) : (
+                      <>
+                        <span className="cipher-label">IV</span> {m.ivHex}<br />
+                        <span className="cipher-label">CT</span> {m.ciphertextB64}
+                      </>
+                    )}
+                    {m.decrypted !== undefined && (
+                      <div className="decrypted-plaintext">
+                        {showTextDiff ? (
+                          <>
+                            <span className="decrypted-label">Before:</span> {m.originalText}<br />
+                            <span className="decrypted-label">After:</span> {m.decrypted}
+                          </>
+                        ) : (
+                          <><span className="decrypted-label">Sent to recipient:</span> {m.decrypted}</>
+                        )}
+                      </div>
+                    )}
+                    {replayEnabled && (
+                      <button className="replay-btn" onClick={() => replayCaptured(m)}>
+                        <i className="ti ti-repeat" aria-hidden="true" /> Replay this message
+                      </button>
+                    )}
                   </div>
                 )
               }
@@ -481,7 +567,6 @@ function Level3() {
             {bobMsgs.map(m => (
               <div key={m.id} className={`msg ${m.type}`}>
                 {m.text}
-                {m.type === 'received' && m.tampered && <span className="tampered-badge">⚠ altered in transit</span>}
               </div>
             ))}
           </div>
@@ -516,6 +601,9 @@ function Level3() {
           directly to each other. Separately, select Tampering: DH gives confidentiality here, but
           nothing checks integrity. Once enabled, new messages pause at Eve first — try sending one
           and choosing "Corrupt &amp; forward": a blind ciphertext edit still decrypts without error.
+          Select Replay and every captured message gets a "Replay this message" button instead —
+          nothing here tracks what's already been delivered, so decrypting the same captured
+          ciphertext again succeeds just as well the second time.
           Level 4
           fixes the impersonation problem by having each side sign its public value with
           a long-term identity key Eve doesn't have.

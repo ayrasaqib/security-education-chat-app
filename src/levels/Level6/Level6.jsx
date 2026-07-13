@@ -34,6 +34,7 @@ const STEP_DELAY_MS = 550
 const ATTACKS = [
   { id: 'mitm', label: 'MITM / Impersonation', available: true },
   { id: 'tampering', label: 'Tampering', available: true },
+  { id: 'replay', label: 'Replay', available: true },
 ]
 
 function Level6() {
@@ -46,6 +47,7 @@ function Level6() {
   const [aliceFingerprint, setAliceFingerprint] = useState('')
   const [bobFingerprint, setBobFingerprint] = useState('')
   const [tamperingEnabled, setTamperingEnabled] = useState(false)
+  const [replayEnabled, setReplayEnabled] = useState(false)
   const [pendingTamperMsgs, setPendingTamperMsgs] = useState([]) // messages Eve is holding, awaiting forward decision
 
   const {
@@ -100,6 +102,7 @@ function Level6() {
     setEveMsgs([])
     setAttackResult(null)
     setTamperingEnabled(false)
+    setReplayEnabled(false)
     setPendingTamperMsgs([])
 
     // Fresh session — sequence counters and "last seen" trackers reset along with the keys below.
@@ -286,9 +289,18 @@ function Level6() {
     })
   }
 
+  function runReplayAttack() {
+    if (selectedAttackId !== 'replay') return
+    runAttack(async () => {
+      await runHandshake(false)
+      setReplayEnabled(true)
+    })
+  }
+
   function runSelectedAttack() {
     if (selectedAttackId === 'mitm') runMitmAttack()
     else if (selectedAttackId === 'tampering') runTamperingAttack()
+    else if (selectedAttackId === 'replay') runReplayAttack()
   }
 
   /**
@@ -300,34 +312,36 @@ function Level6() {
     const hmacKey = hmacKeyRef.current
     const aesKey = aesKeyRef.current
     const setCounter = fromAlice ? setLastSeenFromAlice : setLastSeenFromBob
+    const lastSeenRef = fromAlice ? lastSeenFromAliceRef : lastSeenFromBobRef
+    const counterBefore = lastSeenRef.current // value the sequence check actually compares seq against
 
     const macBytes = encodeForMacWithSeq(seq, ivHex, ciphertextB64)
     const computedTag = await computeHmacHex(hmacKey, macBytes)
     const integrityOk = await verifyHmacHex(hmacKey, tagHex, macBytes)
     if (!integrityOk) {
-      const lastSeenRef = fromAlice ? lastSeenFromAliceRef : lastSeenFromBobRef
       return {
         ok: false,
-        reason: '✕ HMAC verification failed — message discarded',
-        counterAfter: lastSeenRef.current,
+        reason: '✕ HMAC verification failed due to tag mismatch — message discarded',
+        counterAfter: counterBefore,
+        counterBefore,
         sentTag: tagHex,
         computedTag,
       }
     }
 
-    const lastSeenRef = fromAlice ? lastSeenFromAliceRef : lastSeenFromBobRef
-    if (isReplay(seq, lastSeenRef.current)) {
+    if (isReplay(seq, counterBefore)) {
       return {
         ok: false,
         reason: `✕ Replay detected — seqNum ${seq} already seen, discarding`,
-        counterAfter: lastSeenRef.current, // rejected — counter does NOT advance
+        counterAfter: counterBefore, // rejected — counter does NOT advance
+        counterBefore,
       }
     }
 
     lastSeenRef.current = seq
     setCounter(seq) // reactive mirror, so the counter visibly ticks up next to the message
     const text = await decryptMessage(aesKey, ivHex, ciphertextB64)
-    return { ok: true, text, counterAfter: seq }
+    return { ok: true, text, counterAfter: seq, counterBefore }
   }
 
   async function sendMsg() {
@@ -365,7 +379,7 @@ function Level6() {
     const delivered = await deliverMessage({ seq, ivHex, ciphertextB64, tagHex, fromAlice: isAlice })
 
     const deliveredMsg = delivered.ok
-      ? { id: id + 0.1, type: 'received', text: delivered.text, verified: true, seq, ok: true, counterAfter: delivered.counterAfter }
+      ? { id: id + 0.1, type: 'received', text: delivered.text, verified: true, seq, ok: true, counterAfter: delivered.counterAfter, counterBefore: delivered.counterBefore }
       : {
           id: id + 0.1,
           type: 'rejected',
@@ -374,6 +388,7 @@ function Level6() {
           seq,
           ok: false,
           counterAfter: delivered.counterAfter,
+          counterBefore: delivered.counterBefore,
           sentTag: delivered.sentTag,
           computedTag: delivered.computedTag,
         }
@@ -413,7 +428,7 @@ function Level6() {
 
     const id = msgId.current++
     const replayedMsg = result.ok
-      ? { id, type: 'received', text: result.text, verified: true, seq: m.seq, ok: true, counterAfter: result.counterAfter }
+      ? { id, type: 'received', text: result.text, verified: true, seq: m.seq, ok: true, counterAfter: result.counterAfter, counterBefore: result.counterBefore }
       : {
           id,
           type: 'rejected',
@@ -422,6 +437,7 @@ function Level6() {
           seq: m.seq,
           ok: false,
           counterAfter: result.counterAfter,
+          counterBefore: result.counterBefore,
           sentTag: result.sentTag,
           computedTag: result.computedTag,
         }
@@ -434,8 +450,14 @@ function Level6() {
 
     addEve(
       `↻ Replayed FROM: ${m.sender.toUpperCase()} seqNum ${m.seq} — ` +
-      (result.ok ? 'accepted (!)' : 'rejected by sequence check'),
+      (result.ok ? 'accepted (!)' : 'rejected'),
       'capture'
+    )
+
+    setAttackResult(
+      result.ok
+        ? { type: 'success', text: 'Attack succeeded: replayed message accepted' }
+        : { type: 'blocked', text: 'Attack blocked: replay detected via sequence check' }
     )
   }
 
@@ -453,7 +475,7 @@ function Level6() {
     })
 
     const deliveredMsg = result.ok
-      ? { id: item.id + 0.1, type: 'received', text: result.text, verified: true, tampered: corrupt, seq: item.seq, ok: true, counterAfter: result.counterAfter }
+      ? { id: item.id + 0.1, type: 'received', text: result.text, verified: true, seq: item.seq, ok: true, counterAfter: result.counterAfter, counterBefore: result.counterBefore }
       : {
           id: item.id + 0.1,
           type: 'rejected',
@@ -462,6 +484,7 @@ function Level6() {
           seq: item.seq,
           ok: false,
           counterAfter: result.counterAfter,
+          counterBefore: result.counterBefore,
           sentTag: result.sentTag,
           computedTag: result.computedTag,
         }
@@ -476,17 +499,19 @@ function Level6() {
       ts: item.ts,
       seq: item.seq,
       ivHex: item.ivHex,
-      ciphertextB64: item.ciphertextB64,
+      ciphertextB64: finalCiphertext,
+      originalCiphertextB64: item.ciphertextB64,
       tagHex: item.tagHex,
       bytes: item.bytes,
       fromAlice: item.fromAlice,
+      note: corrupt ? 'CORRUPTED before relay' : 'unmodified',
     }])
 
     setPendingTamperMsgs(prev => prev.filter(p => p.id !== item.id))
 
     if (corrupt) {
       setAttackResult(
-        integrityOk
+        result.ok
           ? { type: 'success', text: 'Attack succeeded: altered message accepted' }
           : { type: 'blocked', text: 'Attack blocked: HMAC verification failed' }
       )
@@ -541,16 +566,15 @@ function Level6() {
               <div key={m.id} className={`msg ${m.type}`}>
                 {m.text}
                 {m.type === 'received' && <span className="mac-badge">✓ verified &amp; fresh</span>}
-                {m.type === 'received' && m.tampered && <span className="tampered-badge">⚠ altered by Eve — accepted anyway</span>}
                 {m.type === 'rejected' && m.sentTag && (
                   <div className="tag-mismatch">
                     <span className="cipher-label">SENT TAG</span> {macShortHex(m.sentTag, 24)}<br />
                     <span className="cipher-label">COMPUTED</span> {macShortHex(m.computedTag, 24)}
                   </div>
                 )}
-                {typeof m.seq === 'number' && (
+                {typeof m.seq === 'number' && !m.sentTag && (
                   <span className={`seq-badge ${m.ok ? 'match' : 'mismatch'}`}>
-                    seqNum {m.seq} {m.ok ? '=' : '✕'} counter {m.counterAfter}
+                    seqNum {m.seq} {m.ok ? '>' : '≤'} last seen {m.counterBefore}
                   </span>
                 )}
               </div>
@@ -566,16 +590,29 @@ function Level6() {
           <div className="messages" ref={eveScrollRef}>
             {eveMsgs.map(m => {
               if (m.type === 'attacker') {
+                // Blind tampering flips a bit in place — it never re-encrypts, so the IV never changes
+                // and ciphertext equality reliably means "unmodified".
+                const showCtDiff = m.note !== undefined && m.note !== 'unmodified'
                 return (
                   <div key={m.id} className="msg attacker">
-                    [{m.ts}] FROM: {m.sender.toUpperCase()} · SEQNUM{m.seq} · {m.bytes}B<br />
+                    [{m.ts}] FROM: {m.sender.toUpperCase()} · SEQNUM{m.seq} · {m.bytes}B{m.note ? ` · ${m.note}` : ''}<br />
                     <span className="cipher-label">IV</span> {m.ivHex}<br />
-                    <span className="cipher-label">CT</span> {m.ciphertextB64}<br />
+                    {showCtDiff ? (
+                      <>
+                        <span className="text-diff-label">CT (captured)</span> {m.originalCiphertextB64}<br />
+                        <span className="text-diff-label">CT (sent)</span> {m.ciphertextB64}<br />
+                      </>
+                    ) : (
+                      <>
+                        <span className="cipher-label">CT</span> {m.ciphertextB64}<br />
+                      </>
+                    )}
                     <span className="cipher-label">TAG</span> {macShortHex(m.tagHex, 24)}
-                    <div className="cannot-read">✕ cannot read plaintext, cannot forge a valid tag</div>
-                    <button className="replay-btn" onClick={() => replayCaptured(m)} disabled={status !== 'ready'}>
-                      <i className="ti ti-repeat" aria-hidden="true" /> Replay this message
-                    </button>
+                    {replayEnabled && (
+                      <button className="replay-btn" onClick={() => replayCaptured(m)} disabled={status !== 'ready'}>
+                        <i className="ti ti-repeat" aria-hidden="true" /> Replay this message
+                      </button>
+                    )}
                   </div>
                 )
               }
@@ -618,16 +655,15 @@ function Level6() {
               <div key={m.id} className={`msg ${m.type}`}>
                 {m.text}
                 {m.type === 'received' && <span className="mac-badge">✓ verified &amp; fresh</span>}
-                {m.type === 'received' && m.tampered && <span className="tampered-badge">⚠ altered by Eve — accepted anyway</span>}
                 {m.type === 'rejected' && m.sentTag && (
                   <div className="tag-mismatch">
                     <span className="cipher-label">SENT TAG</span> {macShortHex(m.sentTag, 24)}<br />
                     <span className="cipher-label">COMPUTED</span> {macShortHex(m.computedTag, 24)}
                   </div>
                 )}
-                {typeof m.seq === 'number' && (
+                {typeof m.seq === 'number' && !m.sentTag && (
                   <span className={`seq-badge ${m.ok ? 'match' : 'mismatch'}`}>
-                    seqNum {m.seq} {m.ok ? '=' : '✕'} counter {m.counterAfter}
+                    seqNum {m.seq} {m.ok ? '>' : '≤'} last seen {m.counterBefore}
                   </span>
                 )}
               </div>
@@ -663,8 +699,10 @@ function Level6() {
           Tampering above and run it, then send a message: it pauses at Eve first, and choosing
           "Corrupt &amp; forward" shows the mismatched tag that gets it rejected immediately. The one
           gap all of that still leaves open is a captured message being resent unmodified, which is
-          exactly what sequence numbers close: try "Replay this message" to see a perfectly valid,
-          untampered message get rejected anyway, because its sequence number was already seen.
+          exactly what sequence numbers close: select Replay above and run it, then send a message
+          and try "Replay this message" on it — a perfectly valid, untampered message gets rejected
+          anyway, because its sequence number was already seen. Levels 1-5 have no such counter, so
+          the same attack succeeds against every one of them.
         </p>
         <p>
           Defence in depth isn't one control doing everything — it's each layer covering the

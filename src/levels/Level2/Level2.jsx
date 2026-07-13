@@ -8,6 +8,7 @@ const STEP_DELAY_MS = 550
 
 const ATTACKS = [
   { id: 'tampering', label: 'Tampering', available: true },
+  { id: 'replay', label: 'Replay', available: true },
 ]
 
 function Level2() {
@@ -19,6 +20,7 @@ function Level2() {
   const [sender, setSender] = useState('alice')
   const [status, setStatus] = useState('exchanging') // 'exchanging' | 'ready'
   const [tamperingEnabled, setTamperingEnabled] = useState(false)
+  const [replayEnabled, setReplayEnabled] = useState(false)
 
   const {
     selectedAttackId, setSelectedAttackId, attackRunning, attackResult, setAttackResult, runAttack,
@@ -74,6 +76,7 @@ function Level2() {
     setEveMsgs([])
     setPendingMsgs([])
     setTamperingEnabled(false)
+    setReplayEnabled(false)
     setAttackResult(null)
 
     addAlice('Generating AES-256 session key locally…')
@@ -140,14 +143,16 @@ function Level2() {
         originalText: plaintext, editedText: plaintext,
       }])
     } else {
-      // The receiver only ever gets ciphertext + IV, then decrypts locally.
+      // The receiver only ever gets ciphertext + IV, then decrypts locally. Eve holds the same
+      // captured key, so she decrypts it too, the moment it's intercepted — no reason to hide
+      // that behind an extra click.
       const decrypted = await decryptMessage(key, ivHex, ciphertextB64)
       const deliveredMsg = { id: id + 0.1, type: 'received', text: decrypted }
       if (isAlice) setBobMsgs(prev => [...prev, deliveredMsg])
       else setAliceMsgs(prev => [...prev, deliveredMsg])
 
       setEveMsgs(prev => [...prev, {
-        id: id + 0.2, type: 'attacker', sender, ts, ivHex, ciphertextB64, bytes: ciphertextBytes,
+        id: id + 0.2, type: 'attacker', sender, ts, ivHex, ciphertextB64, bytes: ciphertextBytes, decrypted,
       }])
     }
 
@@ -163,14 +168,21 @@ function Level2() {
   }
 
   // Eve already has the key, so she's not blindly flipping bits here — she can see the exact
-  // plaintext and retype it before re-encrypting and forwarding whatever she decides on.
+  // plaintext and retype it before deciding what to send on. If she's leaving it alone, there's
+  // no reason to re-encrypt — she just relays the exact bytes she intercepted, and Bob decrypts
+  // them with the same shared key Alice used. Only an actual edit forces her to build fresh
+  // ciphertext, which needs a new IV under CTR regardless of what changed. The outcome goes in
+  // her own panel rather than a warning badge on Bob's bubble — Bob's UI never sees any of this.
   async function forwardPending(item) {
     const key = keyRef.current
-    const { ivHex, ciphertextB64, ciphertextBytes } = await encryptMessage(key, item.editedText)
+    const wasEdited = item.editedText !== item.originalText
+
+    const { ivHex, ciphertextB64, ciphertextBytes } = wasEdited
+      ? await encryptMessage(key, item.editedText)
+      : { ivHex: item.ivHex, ciphertextB64: item.ciphertextB64, ciphertextBytes: item.bytes }
     const delivered = await decryptMessage(key, ivHex, ciphertextB64)
 
-    const wasEdited = item.editedText !== item.originalText
-    const deliveredMsg = { id: item.id + 0.1, type: 'received', text: delivered, tampered: wasEdited }
+    const deliveredMsg = { id: item.id + 0.1, type: 'received', text: delivered }
     if (item.fromAlice) setBobMsgs(prev => [...prev, deliveredMsg])
     else setAliceMsgs(prev => [...prev, deliveredMsg])
 
@@ -182,13 +194,17 @@ function Level2() {
       ivHex,
       ciphertextB64,
       bytes: ciphertextBytes,
+      decrypted: delivered,
+      originalText: item.originalText,
+      originalIvHex: item.ivHex,
+      originalCiphertextB64: item.ciphertextB64,
+      note: wasEdited ? 'EDITED before relay' : 'unmodified',
     }])
 
     setPendingMsgs(prev => prev.filter(p => p.id !== item.id))
 
     if (wasEdited) {
-      
-      ({ type: 'success', text: 'Attack succeeded: altered message accepted' })
+      setAttackResult({ type: 'success', text: 'Attack succeeded: altered message accepted' })
     }
   }
 
@@ -202,13 +218,35 @@ function Level2() {
     })
   }
 
-  // Eve holds the literal session key (captured during the naive exchange), so she can decrypt
-  // any historical captured ciphertext at any point. Messages currently held pending don't need
-  // this — they're already shown decrypted and editable directly.
-  async function revealDecryption(id, ivHex, ciphertextB64) {
+  // Same reset-then-arm pattern, but messages keep delivering instantly — replay doesn't need
+  // to intercept anything in flight, it just needs a message that's already been captured.
+  function runReplayAttack() {
+    if (selectedAttackId !== 'replay') return
+    runAttack(async () => {
+      await runKeyExchange()
+      setReplayEnabled(true)
+    })
+  }
+
+  function runSelectedAttack() {
+    if (selectedAttackId === 'tampering') runTamperingAttack()
+    else if (selectedAttackId === 'replay') runReplayAttack()
+  }
+
+  // AES-CTR alone has no integrity or freshness check — decrypting the exact same IV/ciphertext
+  // a second time produces the exact same plaintext, and nothing on the receiving end knows this
+  // isn't the first time it's seen this message, so the outcome is only visible in Eve's panel.
+  async function replayCaptured(m) {
     const key = keyRef.current
-    const text = await decryptMessage(key, ivHex, ciphertextB64)
-    setEveMsgs(prev => prev.map(m => (m.id === id ? { ...m, decrypted: text } : m)))
+    const text = await decryptMessage(key, m.ivHex, m.ciphertextB64)
+    const id = msgId.current++
+    const replayedMsg = { id, type: 'received', text }
+    if (m.sender === 'alice') setBobMsgs(prev => [...prev, replayedMsg])
+    else setAliceMsgs(prev => [...prev, replayedMsg])
+
+    addEve(`↻ Replayed FROM: ${m.sender.toUpperCase()} — accepted, nothing here tracks what's already been delivered`)
+
+    setAttackResult({ type: 'success', text: 'Attack succeeded: replayed message accepted' })
   }
 
   return (
@@ -228,9 +266,9 @@ function Level2() {
         attacks={ATTACKS}
         selectedAttackId={selectedAttackId}
         onSelect={setSelectedAttackId}
-        onRun={runTamperingAttack}
+        onRun={runSelectedAttack}
         running={attackRunning}
-        disabled={attackRunning || tamperingEnabled || status === 'exchanging'}
+        disabled={attackRunning || tamperingEnabled || replayEnabled || status === 'exchanging'}
         result={attackResult}
       />
 
@@ -242,7 +280,6 @@ function Level2() {
             {aliceMsgs.map(m => (
               <div key={m.id} className={`msg ${m.type}`}>
                 {m.text}
-                {m.type === 'received' && m.tampered && <span className="tampered-badge">⚠ altered by Eve — accepted anyway</span>}
               </div>
             ))}
           </div>
@@ -258,22 +295,40 @@ function Level2() {
           <div className="messages" ref={eveScrollRef}>
             {eveMsgs.map(m => {
               if (m.type === 'attacker') {
+                // AES-CTR needs a fresh IV on every encryption, so Level 2's re-encrypted ciphertext
+                // never byte-for-byte matches the original capture — even when the plaintext wasn't
+                // edited. Basing the diff on the plaintext-derived `note` (not raw ciphertext equality)
+                // keeps "unmodified" forwards showing as a single row, the way they actually are.
+                const showCtDiff = m.note !== undefined && m.note !== 'unmodified'
+                const showTextDiff = m.originalText !== undefined && m.originalText !== m.decrypted
                 return (
                   <div key={m.id} className="msg attacker">
-                    [{m.ts}] FROM: {m.sender.toUpperCase()} · {m.bytes}B<br />
-                    <span className="cipher-label">IV</span> {m.ivHex}<br />
-                    <span className="cipher-label">CT</span> {m.ciphertextB64}
-                    {m.decrypted === undefined ? (
+                    [{m.ts}] FROM: {m.sender.toUpperCase()} · {m.bytes}B{m.note ? ` · ${m.note}` : ''}<br />
+                    {showCtDiff ? (
                       <>
-                        <div className="cannot-read">✕ cannot read plaintext — without the key</div>
-                        <button className="decrypt-btn" onClick={() => revealDecryption(m.id, m.ivHex, m.ciphertextB64)}>
-                          <i className="ti ti-lock-open" aria-hidden="true" /> Decrypt with captured key
-                        </button>
+                        <span className="text-diff-label">IV/CT (captured)</span> {m.originalIvHex} / {m.originalCiphertextB64}<br />
+                        <span className="text-diff-label">IV/CT (sent)</span> {m.ivHex} / {m.ciphertextB64}
                       </>
                     ) : (
-                      <div className="decrypted-plaintext">
-                        <span className="decrypted-label">Decrypted with captured key:</span> {m.decrypted}
-                      </div>
+                      <>
+                        <span className="cipher-label">IV</span> {m.ivHex}<br />
+                        <span className="cipher-label">CT</span> {m.ciphertextB64}
+                      </>
+                    )}
+                    <div className="decrypted-plaintext">
+                      {showTextDiff ? (
+                        <>
+                          <span className="decrypted-label">Before:</span> {m.originalText}<br />
+                          <span className="decrypted-label">After:</span> {m.decrypted}
+                        </>
+                      ) : (
+                        <><span className="decrypted-label">Decrypted with captured key:</span> {m.decrypted}</>
+                      )}
+                    </div>
+                    {replayEnabled && (
+                      <button className="replay-btn" onClick={() => replayCaptured(m)}>
+                        <i className="ti ti-repeat" aria-hidden="true" /> Replay this message
+                      </button>
                     )}
                   </div>
                 )
@@ -290,6 +345,7 @@ function Level2() {
                   <span className="cipher-label">IV</span> {item.ivHex}<br />
                   <span className="cipher-label">CT</span> {item.ciphertextB64}
                 </div>
+                <span className="decrypted-label">Decrypted with captured key:</span>
                 <textarea
                   className="intercept-textarea"
                   value={item.editedText}
@@ -311,7 +367,6 @@ function Level2() {
             {bobMsgs.map(m => (
               <div key={m.id} className={`msg ${m.type}`}>
                 {m.text}
-                {m.type === 'received' && m.tampered && <span className="tampered-badge">⚠ altered by Eve — accepted anyway</span>}
               </div>
             ))}
           </div>
@@ -342,12 +397,14 @@ function Level2() {
           Eve is monitoring the same channel and can capture the entire key, giving her the ability to decrypt the
           conversation. There is no mechanism to establish a key securely, so the channel is vulnerable.
           Each message is encrypted with AES-256-CTR using a key both parties already hold, and
-          decrypted only on arrival. Eve intercepts real ciphertext — try "Decrypt with captured key" on any
-          intercepted message to see her actually recover the plaintext using the exact key she captured
-          earlier. Confidentiality is not solved here at all. On top of that, AES-256-CTR has no integrity
+          decrypted only on arrival. Eve intercepts real ciphertext, but since she captured the same
+          key, every intercepted message is shown already decrypted right next to it — no separate
+          step needed. Confidentiality is not solved here at all. On top of that, AES-256-CTR has no integrity
           check — select Tampering above and run it, then send a message: it pauses at Eve first, already
           decrypted with her captured key, and she can retype it directly before forwarding — no blind
-          guessing required, and no error on arrival either way.
+          guessing required, and no error on arrival either way. Select Replay instead and every
+          intercepted message gets a "Replay this message" button — re-decrypting and re-delivering the
+          exact same IV and ciphertext succeeds again, because nothing here tracks what's already arrived.
         </p>
       </div>
     </div>

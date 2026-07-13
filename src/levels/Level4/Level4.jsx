@@ -27,6 +27,7 @@ const STEP_DELAY_MS = 550
 const ATTACKS = [
   { id: 'mitm', label: 'MITM / Impersonation', available: true },
   { id: 'tampering', label: 'Tampering', available: true },
+  { id: 'replay', label: 'Replay', available: true },
 ]
 
 function Level4() {
@@ -39,6 +40,7 @@ function Level4() {
   const [aliceFingerprint, setAliceFingerprint] = useState('')
   const [bobFingerprint, setBobFingerprint] = useState('')
   const [tamperingEnabled, setTamperingEnabled] = useState(false)
+  const [replayEnabled, setReplayEnabled] = useState(false)
   const [pendingTamperMsgs, setPendingTamperMsgs] = useState([]) // messages Eve is holding, awaiting forward decision
 
   const {
@@ -91,6 +93,7 @@ function Level4() {
     setEveMsgs([])
     setAttackResult(null)
     setTamperingEnabled(false)
+    setReplayEnabled(false)
     setPendingTamperMsgs([])
 
     const aliceIdentity = aliceIdentityRef.current
@@ -243,9 +246,34 @@ function Level4() {
     })
   }
 
+  function runReplayAttack() {
+    if (selectedAttackId !== 'replay') return
+    runAttack(async () => {
+      await runHandshake(false)
+      setReplayEnabled(true)
+    })
+  }
+
   function runSelectedAttack() {
     if (selectedAttackId === 'mitm') runMitmAttack()
     else if (selectedAttackId === 'tampering') runTamperingAttack()
+    else if (selectedAttackId === 'replay') runReplayAttack()
+  }
+
+  // Signatures protect the handshake, not individual messages — AES-CTR has no freshness check,
+  // so decrypting the same captured IV/ciphertext again just produces the same plaintext again.
+  // Logged in Eve's panel, since Bob's client has no way to detect the repeat.
+  async function replayCaptured(m) {
+    const key = keyRef.current
+    const text = await decryptMessage(key, m.ivHex, m.ciphertextB64)
+    const id = msgId.current++
+    const replayedMsg = { id, type: 'received', text }
+    if (m.sender === 'alice') setBobMsgs(prev => [...prev, replayedMsg])
+    else setAliceMsgs(prev => [...prev, replayedMsg])
+
+    addEve(`↻ Replayed FROM: ${m.sender.toUpperCase()} — accepted, nothing here tracks what's already been delivered`)
+
+    setAttackResult({ type: 'success', text: 'Attack succeeded: replayed message accepted' })
   }
 
   // Authentication protects the HANDSHAKE — it says nothing about individual messages after
@@ -256,7 +284,7 @@ function Level4() {
     const finalCiphertext = corrupt ? tamperCiphertextB64(item.ciphertextB64) : item.ciphertextB64
     const delivered = await decryptMessage(key, item.ivHex, finalCiphertext)
 
-    const deliveredMsg = { id: item.id + 0.1, type: 'received', text: delivered, tampered: corrupt }
+    const deliveredMsg = { id: item.id + 0.1, type: 'received', text: delivered }
     if (item.fromAlice) setBobMsgs(prev => [...prev, deliveredMsg])
     else setAliceMsgs(prev => [...prev, deliveredMsg])
 
@@ -266,8 +294,10 @@ function Level4() {
       sender: item.fromAlice ? 'alice' : 'bob',
       ts: item.ts,
       ivHex: item.ivHex,
-      ciphertextB64: item.ciphertextB64,
+      ciphertextB64: finalCiphertext,
+      originalCiphertextB64: item.ciphertextB64,
       bytes: item.bytes,
+      note: corrupt ? 'CORRUPTED before relay' : 'unmodified',
     }])
 
     setPendingTamperMsgs(prev => prev.filter(p => p.id !== item.id))
@@ -368,7 +398,6 @@ function Level4() {
             {aliceMsgs.map(m => (
               <div key={m.id} className={`msg ${m.type}`}>
                 {m.text}
-                {m.type === 'received' && m.tampered && <span className="tampered-badge">⚠ altered by Eve — accepted anyway</span>}
               </div>
             ))}
           </div>
@@ -382,12 +411,29 @@ function Level4() {
           <div className="messages" ref={eveScrollRef}>
             {eveMsgs.map(m => {
               if (m.type === 'attacker') {
+                // Blind tampering flips a bit in place — it never re-encrypts, so the IV never changes
+                // and ciphertext equality reliably means "unmodified". (Kept consistent with Levels 2/3,
+                // which can't rely on ciphertext equality since their flows re-encrypt with a fresh IV.)
+                const showCtDiff = m.note !== undefined && m.note !== 'unmodified'
                 return (
                   <div key={m.id} className="msg attacker">
-                    [{m.ts}] FROM: {m.sender.toUpperCase()} · {m.bytes}B<br />
+                    [{m.ts}] FROM: {m.sender.toUpperCase()} · {m.bytes}B{m.note ? ` · ${m.note}` : ''}<br />
                     <span className="cipher-label">IV</span> {m.ivHex}<br />
-                    <span className="cipher-label">CT</span> {m.ciphertextB64}
-                    <div className="cannot-read">✕ cannot read plaintext</div>
+                    {showCtDiff ? (
+                      <>
+                        <span className="text-diff-label">CT (captured)</span> {m.originalCiphertextB64}<br />
+                        <span className="text-diff-label">CT (sent)</span> {m.ciphertextB64}
+                      </>
+                    ) : (
+                      <>
+                        <span className="cipher-label">CT</span> {m.ciphertextB64}
+                      </>
+                    )}
+                    {replayEnabled && (
+                      <button className="replay-btn" onClick={() => replayCaptured(m)}>
+                        <i className="ti ti-repeat" aria-hidden="true" /> Replay this message
+                      </button>
+                    )}
                   </div>
                 )
               }
@@ -427,7 +473,6 @@ function Level4() {
             {bobMsgs.map(m => (
               <div key={m.id} className={`msg ${m.type}`}>
                 {m.text}
-                {m.type === 'received' && m.tampered && <span className="tampered-badge">⚠ altered by Eve — accepted anyway</span>}
               </div>
             ))}
           </div>
@@ -463,7 +508,9 @@ function Level4() {
           That signature only ever protects the handshake, though — select Tampering above and run it.
           Once enabled, new messages pause at Eve first: choose "Corrupt &amp; forward" and see that
           AES-CTR still has no per-message integrity check, so a blind ciphertext edit decrypts
-          without error, same as Levels 2 and 3.
+          without error, same as Levels 2 and 3. Select Replay instead and every captured message
+          gets a "Replay this message" button — resending the exact same IV and ciphertext decrypts
+          successfully all over again, because nothing here checks whether it's already been seen.
         </p>
       </div>
     </div>
